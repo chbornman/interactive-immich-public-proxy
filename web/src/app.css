@@ -1,0 +1,57 @@
+:root {
+  --bg: #f6f7f4;
+  --bg-elev: #ffffff;
+  --bg-elev-2: #eef1ec;
+  --border: #dce0d7;
+  --text: #1b1e1a;
+  --text-dim: #5f655c;
+  --accent: #2f7d50; /* forest green */
+  --accent-strong: #246340;
+  --danger: #c0392b;
+  --radius: 5px; /* very tight rounded corners */
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+a {
+  color: var(--accent);
+}
+
+input,
+textarea {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--accent-strong);
+  color: #fff;
+}

@@ -1,0 +1,250 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import type { Asset, AlbumInfo, FilterName, KindFilter, Visitor } from './types';
+  import {
+    getShareKey,
+    getAlbum,
+    getAssets,
+    getVisitor,
+    downloadAssets,
+    bulkMark,
+    unlockShare,
+    ApiError,
+  } from './api';
+  import Toolbar from './components/Toolbar.svelte';
+  import Gallery from './components/Gallery.svelte';
+  import Lightbox from './components/Lightbox.svelte';
+  import NameBanner from './components/NameBanner.svelte';
+  import PasswordGate from './components/PasswordGate.svelte';
+
+  const PAGE = 100;
+  const shareKey = getShareKey();
+
+  let album: AlbumInfo | null = null;
+  let assets: Asset[] = [];
+  let cursor = '';
+  let nextCursor: string | null = '';
+  let loading = false;
+  let fatalError = '';
+  let passwordRequired = false;
+  let unlockBusy = false;
+  let unlockError = '';
+
+  let filter: FilterName = 'all';
+  let kind: KindFilter = 'all';
+  let query = '';
+
+  let selectMode = false;
+  let selectedIds = new Set<string>();
+  let downloading = false;
+  let marking = false;
+
+  let openIndex: number | null = null;
+
+  let visitor: Visitor | null = null;
+  let showNameBanner = false;
+
+  let tileSize = Number(localStorage.getItem('ipp-tile')) || 220;
+  function onSize(e: CustomEvent<{ value: number }>) {
+    tileSize = e.detail.value;
+    localStorage.setItem('ipp-tile', String(tileSize));
+  }
+
+  $: hasMore = nextCursor !== null;
+  $: emptyMessage =
+    query || filter !== 'all' ? 'No photos match your filter.' : 'This album is empty.';
+
+  async function resetAndLoad() {
+    assets = [];
+    cursor = '';
+    nextCursor = '';
+    await loadMore();
+  }
+
+  async function loadMore() {
+    if (loading || nextCursor === null) return;
+    loading = true;
+    try {
+      const page = await getAssets({ cursor, limit: PAGE, filter, kind, q: query });
+      // Guard against duplicate ids if the backend overlaps pages.
+      const seen = new Set(assets.map((a) => a.id));
+      const fresh = page.items.filter((a) => !seen.has(a.id));
+      assets = [...assets, ...fresh];
+      nextCursor = page.nextCursor;
+      cursor = page.nextCursor ?? '';
+    } catch (e) {
+      if (e instanceof ApiError && e.passwordRequired) {
+        passwordRequired = true;
+      } else if (e instanceof ApiError && e.status === 404 && assets.length === 0) {
+        fatalError = 'This shared album could not be found. The link may be invalid or expired.';
+      } else if (assets.length === 0) {
+        fatalError = 'Could not load photos. Please try again later.';
+      }
+      nextCursor = null; // stop infinite scroll on error
+    } finally {
+      loading = false;
+    }
+  }
+
+  function onFilter(e: CustomEvent<{ filter: FilterName }>) {
+    if (filter === e.detail.filter) return;
+    filter = e.detail.filter;
+    fatalError = '';
+    resetAndLoad();
+  }
+
+  function onSearch(e: CustomEvent<{ q: string }>) {
+    if (query === e.detail.q) return;
+    query = e.detail.q;
+    fatalError = '';
+    resetAndLoad();
+  }
+
+  function onKind(e: CustomEvent<{ kind: KindFilter }>) {
+    if (kind === e.detail.kind) return;
+    kind = e.detail.kind;
+    fatalError = '';
+    resetAndLoad();
+  }
+
+  function onToggleSelectMode() {
+    selectMode = !selectMode;
+    if (!selectMode) selectedIds = new Set();
+  }
+
+  function onToggleSelect(e: CustomEvent<{ asset: Asset }>) {
+    const id = e.detail.asset.id;
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedIds = next;
+  }
+
+  async function onDownload() {
+    if (selectedIds.size === 0) return;
+    downloading = true;
+    try {
+      await downloadAssets([...selectedIds]);
+    } catch {
+      /* surface nothing fatal */
+    } finally {
+      downloading = false;
+    }
+  }
+
+  async function bulkSetMark(marked: boolean) {
+    if (selectedIds.size === 0) return;
+    marking = true;
+    try {
+      const res = await bulkMark([...selectedIds], marked);
+      const map = new Map(res.items.map((i) => [i.id, i.markCount]));
+      assets = assets.map((a) => (map.has(a.id) ? { ...a, markCount: map.get(a.id) as number } : a));
+    } catch {
+      /* surface nothing fatal */
+    } finally {
+      marking = false;
+    }
+  }
+
+  async function onUnlock(e: CustomEvent<{ password: string }>) {
+    unlockBusy = true;
+    unlockError = '';
+    try {
+      await unlockShare(e.detail.password);
+      passwordRequired = false;
+      fatalError = '';
+      album = await getAlbum().catch(() => null);
+      await resetAndLoad();
+    } catch {
+      unlockError = 'Incorrect password. Try again.';
+    } finally {
+      unlockBusy = false;
+    }
+  }
+
+  function onActivate(e: CustomEvent<{ asset: Asset; index: number }>) {
+    openIndex = e.detail.index;
+  }
+
+  function onAssetChange(e: CustomEvent<{ id: string; markCount: number; hasNote: boolean }>) {
+    const { id, markCount, hasNote } = e.detail;
+    assets = assets.map((a) => (a.id === id ? { ...a, markCount, hasNote } : a));
+  }
+
+  onMount(async () => {
+    if (!shareKey) {
+      fatalError = 'No share key found in the URL.';
+      return;
+    }
+    // Load album + assets + visitor in parallel.
+    const albumP = getAlbum().catch(() => null);
+    const visitorP = getVisitor().catch(() => null);
+    await resetAndLoad();
+    album = await albumP;
+    visitor = await visitorP;
+    if (visitor && !visitor.name.trim()) showNameBanner = true;
+  });
+</script>
+
+<main>
+  {#if passwordRequired}
+    <PasswordGate error={unlockError} busy={unlockBusy} on:submit={onUnlock} />
+  {:else}
+  <Toolbar
+    title={album?.title ?? ''}
+    total={album?.total ?? assets.length}
+    photos={album?.photos ?? 0}
+    videos={album?.videos ?? 0}
+    {filter}
+    {kind}
+    {query}
+    {selectMode}
+    selectedCount={selectedIds.size}
+    {downloading}
+    {marking}
+    visitorName={visitor?.name ?? ''}
+    {tileSize}
+    on:filter={onFilter}
+    on:kind={onKind}
+    on:search={onSearch}
+    on:toggleSelect={onToggleSelectMode}
+    on:download={onDownload}
+    on:markSelected={() => bulkSetMark(true)}
+    on:unmarkSelected={() => bulkSetMark(false)}
+    on:editName={() => (showNameBanner = true)}
+    on:size={onSize}
+  />
+
+  <NameBanner
+    visible={showNameBanner}
+    current={visitor?.name ?? ''}
+    on:saved={(e) => {
+      if (visitor) visitor.name = e.detail.name;
+      showNameBanner = false;
+    }}
+    on:dismiss={() => (showNameBanner = false)}
+  />
+
+  <Gallery
+    {assets}
+    {loading}
+    {hasMore}
+    error={fatalError}
+    {emptyMessage}
+    {selectMode}
+    {selectedIds}
+    targetRowHeight={tileSize}
+    on:loadMore={loadMore}
+    on:activate={onActivate}
+    on:toggleSelect={onToggleSelect}
+  />
+
+  <Lightbox items={assets} bind:openIndex on:assetchange={onAssetChange} />
+  {/if}
+</main>
+
+<style>
+  main {
+    min-height: 100vh;
+  }
+</style>

@@ -1,0 +1,37 @@
+[package]
+name = "interactive-ipp"
+version = "0.1.0"
+edition = "2021"
+description = "Interactive public proxy for Immich shared albums (marks, notes, search)"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.7", features = ["fs", "trace", "compression-br", "compression-gzip"] }
+
+# sqlite only -> no TLS; FromRow derive via "macros" but we use only runtime queries (no compile-time DB)
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+
+# Immich is reached over internal http:// only, so no TLS backend is needed.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+thiserror = "2"
+anyhow = "1"
+
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.11"
+hex = "0.4"
+
+zip = { version = "8", default-features = false, features = ["deflate"] }
+percent-encoding = "2"
+time = { version = "0.3", features = ["parsing"] }
+
+[profile.release]
+opt-level = 2
+lto = "thin"
