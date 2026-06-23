@@ -1,18 +1,29 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { PaperPlaneTilt } from 'phosphor-svelte';
+  import { PaperPlaneTilt, UserCirclePlus } from 'phosphor-svelte';
   import type { Asset, AssetMeta, Note } from '../types';
   import { relativeTime } from '../layout';
+  import { setVisitorName } from '../api';
 
   export let meta: AssetMeta | null = null;
   export let loading = false;
   export let noteBusy = false;
   export let asset: Asset | null = null;
   export let showInfo = false;
+  export let visitorName = '';
 
-  const dispatch = createEventDispatcher<{ addNote: { body: string } }>();
+  const dispatch = createEventDispatcher<{
+    addNote: { body: string };
+    setname: { name: string };
+  }>();
 
   let draft = '';
+  let nameDraft = '';
+  let nameBusy = false;
+  let nameError = '';
+  let nameFocused = false;
+
+  $: needsName = !visitorName || !visitorName.trim();
 
   function fmtDate(secs: number): string {
     if (!secs) return '';
@@ -29,6 +40,28 @@
     if (!body) return;
     dispatch('addNote', { body });
     draft = '';
+  }
+
+  async function saveName() {
+    const trimmed = nameDraft.trim();
+    if (!trimmed || nameBusy) return;
+    nameBusy = true;
+    nameError = '';
+    try {
+      const res = await setVisitorName(trimmed);
+      dispatch('setname', { name: res.name });
+    } catch {
+      nameError = 'Could not save. Try again.';
+    } finally {
+      nameBusy = false;
+    }
+  }
+
+  function onNameKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveName();
+    }
   }
 
   function displayName(n: Note): string {
@@ -118,8 +151,38 @@
   </div>
 
   <div class="composer">
-    <textarea bind:value={draft} placeholder="Add a note…" rows="2" maxlength="2000"></textarea>
-    <button class="primary" on:click={submitNote} disabled={noteBusy || !draft.trim()}>
+    {#if needsName}
+      <div class="name-prompt" class:focused={nameFocused}>
+        <div class="np-head">
+          <UserCirclePlus size={16} weight="fill" />
+          <span>Set a name so notes are attributed to you.</span>
+        </div>
+        <div class="np-row">
+          <input
+            type="text"
+            placeholder="Your name"
+            bind:value={nameDraft}
+            on:keydown={onNameKey}
+            on:focus={() => (nameFocused = true)}
+            on:blur={() => (nameFocused = false)}
+            maxlength="60"
+            aria-label="Display name"
+          />
+          <button class="np-save" on:click={saveName} disabled={nameBusy || !nameDraft.trim()}>
+            {nameBusy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {#if nameError}<span class="np-err">{nameError}</span>{/if}
+      </div>
+    {/if}
+    <textarea
+      bind:value={draft}
+      placeholder={needsName ? 'Add a note (set your name first)…' : 'Add a note…'}
+      rows="2"
+      maxlength="2000"
+      disabled={needsName}
+    ></textarea>
+    <button class="primary" on:click={submitNote} disabled={noteBusy || needsName || !draft.trim()}>
       <PaperPlaneTilt size={15} weight="fill" />
       <span>{noteBusy ? 'Adding…' : 'Add note'}</span>
     </button>
@@ -252,5 +315,62 @@
   .composer .primary:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  textarea:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .name-prompt {
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 9px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .name-prompt.focused {
+    border-color: var(--accent);
+  }
+  .np-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .np-row {
+    display: flex;
+    gap: 6px;
+  }
+  .np-row input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius);
+    padding: 6px 9px;
+    font: inherit;
+  }
+  .np-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .np-save {
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    border-radius: var(--radius);
+    padding: 6px 12px;
+    font: inherit;
+  }
+  .np-save:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .np-err {
+    color: var(--danger);
+    font-size: 12px;
   }
 </style>

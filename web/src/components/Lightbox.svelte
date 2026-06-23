@@ -2,7 +2,7 @@
   import { createEventDispatcher, onDestroy } from 'svelte';
   import PhotoSwipe from 'photoswipe';
   import 'photoswipe/style.css';
-  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp } from 'phosphor-svelte';
+  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp, Play } from 'phosphor-svelte';
   import type { Asset, AssetMeta } from '../types';
   import { assetUrl, getAssetMeta, toggleMark, addNote, downloadAssets, supportsShareFiles } from '../api';
   import NotesPanel from './NotesPanel.svelte';
@@ -10,9 +10,12 @@
   export let items: Asset[] = [];
   /** Index to open; set to a number to open, null to keep closed. */
   export let openIndex: number | null = null;
+  /** Current visitor name (for inline note attribution prompt). */
+  export let visitorName = '';
 
   const dispatch = createEventDispatcher<{
     assetchange: { id: string; markCount: number; hasNote: boolean };
+    slideshow: { index: number };
   }>();
 
   const HEADER = 56;
@@ -50,9 +53,27 @@
     });
   }
 
+  /** Try unmuted autoplay; on browser rejection fall back to muted (per Immich's approach). */
+  async function playVideo(video: HTMLVideoElement) {
+    video.muted = false;
+    try {
+      await video.play();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'NotAllowedError') {
+        video.muted = true;
+        try {
+          await video.play();
+        } catch {
+          /* muted autoplay blocked too — user can press play */
+        }
+      }
+    }
+  }
+
   function paddingFn() {
     if (isMobile) {
-      return { top: HEADER, bottom: HANDLE, left: 6, right: 6 };
+      // Full bleed on mobile: zero side margins, reserve header + bottom handle.
+      return { top: HEADER, bottom: HANDLE, left: 0, right: 0 };
     }
     return { top: HEADER, bottom: 8, left: 8, right: SIDEBAR };
   }
@@ -109,7 +130,20 @@
 
     pswp.on('contentDeactivate', (e) => {
       const v = e.content.element?.querySelector('video');
-      if (v) v.pause();
+      if (v) {
+        v.pause();
+        v.currentTime = 0;
+      }
+    });
+
+    pswp.on('contentActivate', (e) => {
+      const video = e.content.element?.querySelector('video.pswp-video') as HTMLVideoElement | null;
+      if (video) {
+        // Defer until the element is ready; canplay may have fired before activation.
+        const tryPlay = () => playVideo(video);
+        if (video.readyState >= 2) tryPlay();
+        else video.addEventListener('canplay', tryPlay, { once: true });
+      }
     });
 
     pswp.on('change', () => {
@@ -183,6 +217,12 @@
     }
   }
 
+  function startSlideshow() {
+    if (!currentAsset) return;
+    const idx = pswp?.currIndex ?? 0;
+    dispatch('slideshow', { index: idx });
+  }
+
   function toggleInfo() {
     showInfo = !showInfo;
     if (showInfo && isMobile) sheetOpen = true;
@@ -212,6 +252,9 @@
       <button class="hbtn" class:on={showInfo} on:click={toggleInfo} title="Image info" aria-label="Image info">
         <Info size={18} weight={showInfo ? 'fill' : 'regular'} />
       </button>
+      <button class="hbtn" on:click={startSlideshow} title="Slideshow" aria-label="Slideshow">
+        <Play size={18} weight="fill" />
+      </button>
       <button
         class="hbtn"
         on:click={onDownload}
@@ -227,7 +270,15 @@
 
     {#if !isMobile}
       <aside class="lb-side">
-        <NotesPanel {meta} loading={metaLoading} {noteBusy} asset={currentAsset} {showInfo} on:addNote={onAddNote} />
+        <NotesPanel
+          {meta}
+          loading={metaLoading}
+          {noteBusy}
+          asset={currentAsset}
+          {showInfo}
+          {visitorName}
+          on:addNote={onAddNote}
+        />
       </aside>
     {:else}
       <div class="lb-sheet" class:open={sheetOpen}>
@@ -237,7 +288,15 @@
         </button>
         {#if sheetOpen}
           <div class="sheet-body">
-            <NotesPanel {meta} loading={metaLoading} {noteBusy} asset={currentAsset} {showInfo} on:addNote={onAddNote} />
+            <NotesPanel
+              {meta}
+              loading={metaLoading}
+              {noteBusy}
+              asset={currentAsset}
+              {showInfo}
+              {visitorName}
+              on:addNote={onAddNote}
+            />
           </div>
         {/if}
       </div>
@@ -379,7 +438,7 @@
   }
   @media (max-width: 819px) {
     :global(.pswp__html-content) {
-      padding: 56px 6px calc(44px + env(safe-area-inset-bottom, 0)) 6px; /* header + bottom handle */
+      padding: 56px 0 calc(44px + env(safe-area-inset-bottom, 0)) 0; /* header + bottom handle, full bleed */
     }
   }
   :global(.pswp-video-wrap) {

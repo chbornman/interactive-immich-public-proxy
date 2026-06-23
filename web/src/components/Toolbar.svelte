@@ -15,6 +15,7 @@
     Stack,
     Export,
     GithubLogo,
+    Play,
   } from 'phosphor-svelte';
   import type { FilterName, KindFilter } from '../types';
   import { supportsShareFiles } from '../api';
@@ -41,6 +42,7 @@
     markSelected: void;
     unmarkSelected: void;
     editName: void;
+    slideshow: void;
     size: { value: number };
     kind: { kind: KindFilter };
   }>();
@@ -156,6 +158,10 @@
         </span>
       </button>
     {/if}
+    <button on:click={() => dispatch('slideshow')} title="Slideshow" aria-label="Slideshow">
+      <Play size={16} weight="fill" />
+      <span class="label">Slideshow</span>
+    </button>
     <button class:active={selectMode} on:click={() => dispatch('toggleSelect')} title="Select">
       <CheckSquare size={16} weight={selectMode ? 'fill' : 'regular'} />
       <span class="label">{selectMode ? 'Done' : 'Select'}</span>

@@ -36,18 +36,31 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Enter') save();
+    if (e.key === 'Enter') {
+      save();
+    } else if (e.key === 'Escape') {
+      dispatch('dismiss');
+    }
   }
 </script>
 
 {#if visible}
-  <div class="banner" role="region" aria-label="Set your display name">
-    <span class="msg">
-      {current
-        ? 'Change your display name (used on notes you add).'
-        : 'Set a display name so your notes are attributed to you.'}
-    </span>
-    <div class="controls">
+  <div
+    class="overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Set your display name"
+    tabindex="-1"
+    on:click|self={() => dispatch('dismiss')}
+    on:keydown={onKey}
+  >
+    <div class="modal">
+      <h2>Your display name</h2>
+      <p class="msg">
+        {current
+          ? 'Change your display name (used on notes you add).'
+          : 'Set a display name so your notes are attributed to you.'}
+      </p>
       <input
         type="text"
         placeholder="Your name"
@@ -56,52 +69,74 @@
         maxlength="60"
         aria-label="Display name"
       />
-      <button class="primary" on:click={save} disabled={saving || !name.trim()}>
-        {saving ? 'Saving…' : 'Save'}
-      </button>
-      <button class="ghost" on:click={() => dispatch('dismiss')}>Not now</button>
+      {#if error}<span class="error">{error}</span>{/if}
+      <div class="actions">
+        <button class="ghost" on:click={() => dispatch('dismiss')}>{current ? 'Cancel' : 'Not now'}</button>
+        <button class="primary" on:click={save} disabled={saving || !name.trim()}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
     </div>
-    {#if error}<span class="error">{error}</span>{/if}
   </div>
 {/if}
 
 <style>
-  .banner {
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3000000;
+    background: rgba(0, 0, 0, 0.4);
+    display: grid;
+    place-items: center;
+    padding: 20px;
+  }
+  .modal {
+    width: 100%;
+    max-width: 360px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 18px 14px;
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 12px;
-    background: var(--bg-elev-2);
-    border-bottom: 1px solid var(--border);
-    padding: 8px 12px;
+    flex-direction: column;
+    gap: 9px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+  }
+  h2 {
+    margin: 0;
+    font-size: 16px;
   }
   .msg {
+    margin: 0 0 4px;
     color: var(--text-dim);
-    font-size: 14px;
-  }
-  .controls {
-    display: flex;
-    gap: 8px;
-    margin-left: auto;
+    font-size: 13px;
+    line-height: 1.4;
   }
   input {
     background: var(--bg);
     border: 1px solid var(--border);
     color: var(--text);
     border-radius: var(--radius);
-    padding: 6px 10px;
-    min-width: 160px;
+    padding: 9px 11px;
+    font: inherit;
   }
   input:focus {
     outline: none;
     border-color: var(--accent);
   }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+  }
   button {
     border-radius: var(--radius);
-    padding: 6px 14px;
+    padding: 8px 16px;
     border: 1px solid var(--border);
     background: var(--bg-elev);
     color: var(--text);
+    font: inherit;
   }
   button.primary {
     background: var(--accent);
@@ -118,6 +153,5 @@
   .error {
     color: var(--danger);
     font-size: 13px;
-    width: 100%;
   }
 </style>

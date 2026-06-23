@@ -15,6 +15,7 @@
   import Gallery from './components/Gallery.svelte';
   import Lightbox from './components/Lightbox.svelte';
   import NameBanner from './components/NameBanner.svelte';
+  import Slideshow from './components/Slideshow.svelte';
   import PasswordGate from './components/PasswordGate.svelte';
 
   const PAGE = 100;
@@ -40,9 +41,11 @@
   let marking = false;
 
   let openIndex: number | null = null;
+  let slideshowStart: number | null = null;
 
   let visitor: Visitor | null = null;
   let showNameBanner = false;
+  $: visitorName = visitor?.name ?? '';
 
   let tileSize = Number(localStorage.getItem('ipp-tile')) || 220;
   function onSize(e: CustomEvent<{ value: number }>) {
@@ -166,6 +169,19 @@
     openIndex = e.detail.index;
   }
 
+  function startSlideshow(index = 0) {
+    if (assets.length === 0) return;
+    slideshowStart = index;
+  }
+
+  function stopSlideshow() {
+    slideshowStart = null;
+  }
+
+  function onSetName(e: CustomEvent<{ name: string }>) {
+    if (visitor) visitor = { ...visitor, name: e.detail.name };
+  }
+
   function onAssetChange(e: CustomEvent<{ id: string; markCount: number; hasNote: boolean }>) {
     const { id, markCount, hasNote } = e.detail;
     assets = assets.map((a) => (a.id === id ? { ...a, markCount, hasNote } : a));
@@ -212,6 +228,7 @@
     on:markSelected={() => bulkSetMark(true)}
     on:unmarkSelected={() => bulkSetMark(false)}
     on:editName={() => (showNameBanner = true)}
+    on:slideshow={() => startSlideshow(0)}
     on:size={onSize}
   />
 
@@ -219,7 +236,7 @@
     visible={showNameBanner}
     current={visitor?.name ?? ''}
     on:saved={(e) => {
-      if (visitor) visitor.name = e.detail.name;
+      if (visitor) visitor = { ...visitor, name: e.detail.name };
       showNameBanner = false;
     }}
     on:dismiss={() => (showNameBanner = false)}
@@ -239,7 +256,16 @@
     on:toggleSelect={onToggleSelect}
   />
 
-  <Lightbox items={assets} bind:openIndex on:assetchange={onAssetChange} />
+  <Lightbox
+    items={assets}
+    bind:openIndex
+    {visitorName}
+    on:assetchange={onAssetChange}
+    on:slideshow={(e) => startSlideshow(e.detail.index)}
+    on:setname={onSetName}
+  />
+
+  <Slideshow items={assets} bind:startIndex={slideshowStart} on:close={stopSlideshow} />
   {/if}
 </main>
 
