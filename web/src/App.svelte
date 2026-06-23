@@ -169,9 +169,38 @@
     openIndex = e.detail.index;
   }
 
-  function startSlideshow(index = 0) {
+  let slideshowLoading = false;
+
+  /** Eagerly load every page of the current filter so the slideshow covers the full library. */
+  async function loadAll() {
+    if (nextCursor === null) return; // already fully loaded
+    slideshowLoading = true;
+    try {
+      let cur: string = cursor;
+      let next: string | null = nextCursor;
+      while (next !== null) {
+        const page = await getAssets({ cursor: cur, limit: 200, filter, kind, q: query });
+        const seen = new Set(assets.map((a) => a.id));
+        const fresh = page.items.filter((a) => !seen.has(a.id));
+        assets = [...assets, ...fresh];
+        next = page.nextCursor;
+        cur = page.nextCursor ?? '';
+      }
+      nextCursor = null;
+      cursor = '';
+    } catch {
+      /* stop on error — slideshow runs with whatever loaded */
+    } finally {
+      slideshowLoading = false;
+    }
+  }
+
+  async function startSlideshow(index = 0) {
     if (assets.length === 0) return;
+    // Kick off the slideshow immediately with what we have; load the rest in the
+    // background so advancing reaches the full library.
     slideshowStart = index;
+    if (nextCursor !== null) loadAll();
   }
 
   function stopSlideshow() {
@@ -265,7 +294,12 @@
     on:setname={onSetName}
   />
 
-  <Slideshow items={assets} bind:startIndex={slideshowStart} on:close={stopSlideshow} />
+  <Slideshow
+    items={assets}
+    bind:startIndex={slideshowStart}
+    loading={slideshowLoading}
+    on:close={stopSlideshow}
+  />
   {/if}
 </main>
 

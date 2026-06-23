@@ -7,6 +7,8 @@
   export let items: Asset[] = [];
   /** Index to start at; set to a number to start, null to keep inactive. */
   export let startIndex: number | null = null;
+  /** True while more assets are being fetched in the background. */
+  export let loading = false;
 
   const dispatch = createEventDispatcher<{ close: void }>();
 
@@ -52,7 +54,11 @@
   function mountSlide() {
     clearTimeout(timer);
     active = items[index] ?? null;
-    if (!active) return;
+    if (!active) {
+      // Index beyond currently-loaded assets (background load in flight) — retry shortly.
+      timer = setTimeout(mountSlide, 400);
+      return;
+    }
     isVideo = active.kind === 'VIDEO';
     // Wait for Svelte to mount the video element (or image) before wiring events.
     queueMicrotask(attachMediaHandlers);
@@ -180,7 +186,9 @@
         {#if running}<Pause size={20} weight="fill" />{:else}<Play size={20} weight="fill" />{/if}
       </button>
       <button class="bbtn" on:click={next} title="Next" aria-label="Next"><CaretRight size={20} weight="bold" /></button>
-      <span class="counter">{index + 1} / {items.length}</span>
+      <span class="counter">
+        {index + 1} / {items.length}{#if loading} <span class="loading">·</span>{/if}
+      </span>
       <button class="bbtn end" on:click={close} title="Exit slideshow" aria-label="Exit slideshow"><X size={20} /></button>
     </div>
   </div>
@@ -241,5 +249,13 @@
     font-size: 14px;
     font-variant-numeric: tabular-nums;
     margin-left: 8px;
+  }
+  .loading {
+    opacity: 0.7;
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
   }
 </style>
