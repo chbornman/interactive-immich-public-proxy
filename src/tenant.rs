@@ -125,8 +125,48 @@ pub async fn ensure(st: &AppState, key: &str) -> AppResult<Tenant> {
                                     .await;
                             // Release the claim on both success and failure.
                             syncing.lock().unwrap().remove(&id2);
-                            if let Err(e) = res {
-                                tracing::warn!("background resync failed for {id2}: {e}");
+                            match res {
+                                Ok(()) => {
+                                    // Sync works again: drop any stale dead marker.
+                                    // Relisting stays a human decision.
+                                    if let Err(e) = clear_tenant_dead(&db, &id2).await {
+                                        tracing::warn!("clearing dead flag for {id2}: {e}");
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("background resync failed for {id2}: {e}");
+                                    // Probe the share to tell a revoked key apart from a
+                                    // transient failure (share_info classifies the 401 body).
+                                    match immich.share_info(&key, token.as_deref()).await {
+                                        Err(AppError::NotFound) => {
+                                            // Key revoked: delist so we stop advertising
+                                            // an album we can no longer serve.
+                                            match mark_tenant_dead(&db, &id2, now()).await {
+                                                Ok(true) => tracing::warn!(
+                                                    "share key revoked; tenant delisted: {id2}"
+                                                ),
+                                                Ok(false) => {}
+                                                Err(e) => tracing::warn!(
+                                                    "marking tenant {id2} dead: {e}"
+                                                ),
+                                            }
+                                        }
+                                        Err(AppError::PasswordRequired) => {
+                                            // Alive but (re)locked: gate visitors behind
+                                            // the password prompt instead of broken media.
+                                            if let Err(e) =
+                                                mark_tenant_needs_password(&db, &id2).await
+                                            {
+                                                tracing::warn!(
+                                                    "marking tenant {id2} locked: {e}"
+                                                );
+                                            }
+                                        }
+                                        // Probe succeeded (share alive) or itself failed
+                                        // (network): treat the sync failure as transient.
+                                        _ => {}
+                                    }
+                                }
                             }
                         });
                     }
@@ -224,6 +264,45 @@ pub async fn sync_assets(
         .await?;
 
     tx.commit().await?;
+    Ok(())
+}
+
+/// Mark a tenant's share key as revoked: delist it and stamp dead_since,
+/// keeping the first detection time across repeated failures. Returns true
+/// only on the first detection (so the caller can log the transition once).
+pub(crate) async fn mark_tenant_dead(db: &SqlitePool, id: &str, now: i64) -> AppResult<bool> {
+    let was_dead: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT dead_since FROM tenant WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await?;
+    sqlx::query("UPDATE tenant SET listed = 0, dead_since = COALESCE(dead_since, ?) WHERE id = ?")
+        .bind(now)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(matches!(was_dead, Some((None,))))
+}
+
+/// The share is alive but (re)locked: gate visitors behind the password prompt.
+/// The stale token is cleared too — Immich already rejected it, and an empty
+/// share_token is what makes `ensure` return PasswordRequired so previously
+/// unlocked visitors re-prompt instead of fetching media with a dead token.
+pub(crate) async fn mark_tenant_needs_password(db: &SqlitePool, id: &str) -> AppResult<()> {
+    sqlx::query("UPDATE tenant SET needs_password = 1, share_token = '' WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// A successful resync proves the share key works again: forget dead_since.
+/// Deliberately does NOT restore `listed` — relisting is an admin decision.
+pub(crate) async fn clear_tenant_dead(db: &SqlitePool, id: &str) -> AppResult<()> {
+    sqlx::query("UPDATE tenant SET dead_since = NULL WHERE id = ? AND dead_since IS NOT NULL")
+        .bind(id)
+        .execute(db)
+        .await?;
     Ok(())
 }
 

@@ -17,6 +17,9 @@ pub struct TenantSummary {
     public_write: bool,
     listed: bool,
     synced_at: Option<i64>,
+    /// Epoch seconds when the share key was first confirmed revoked (see
+    /// tenant::mark_tenant_dead); None while the share is alive.
+    dead_since: Option<i64>,
     assets: i64,
     marks: i64,
     notes: i64,
@@ -25,7 +28,7 @@ pub struct TenantSummary {
 /// GET /admin/tenants
 pub async fn tenants(State(st): State<AppState>) -> AppResult<Json<Vec<TenantSummary>>> {
     let rows: Vec<TenantSummary> = sqlx::query_as(
-        "SELECT t.id, t.title, t.allow_marks, t.allow_notes, t.allow_download, t.public_write, t.listed, t.synced_at, \
+        "SELECT t.id, t.title, t.allow_marks, t.allow_notes, t.allow_download, t.public_write, t.listed, t.synced_at, t.dead_since, \
          (SELECT COUNT(*) FROM asset a WHERE a.tenant_id = t.id) AS assets, \
          (SELECT COUNT(*) FROM mark m WHERE m.tenant_id = t.id) AS marks, \
          (SELECT COUNT(*) FROM note n WHERE n.tenant_id = t.id AND n.hidden = 0) AS notes \
@@ -140,6 +143,8 @@ pub async fn resync(
     let album = album.ok_or(AppError::NotFound)?;
     let token = (!token.is_empty()).then_some(token);
     tenant::sync_assets(&st.db, &st.immich, &id, &album, &key, token.as_deref()).await?;
+    // A successful manual resync proves the key works: drop any dead marker.
+    tenant::clear_tenant_dead(&st.db, &id).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

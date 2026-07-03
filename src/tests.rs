@@ -319,6 +319,83 @@ async fn album_index_lists_tenants_with_password_flag() {
     assert!(crate::routes::albums::listed_albums(&db).await.unwrap().is_empty());
 }
 
+// ---------------------------------------------------------------------------
+// tenant: dead-share detection helpers
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mark_tenant_dead_delists_and_keeps_first_timestamp() {
+    let db = test_db().await;
+    insert_tenant(&db, "t-1", "key-1", 0).await;
+
+    // First detection: delisted, dead_since stamped, reported as new.
+    assert!(crate::tenant::mark_tenant_dead(&db, "t-1", 1000).await.unwrap());
+    let (listed, dead): (i64, Option<i64>) =
+        sqlx::query_as("SELECT listed, dead_since FROM tenant WHERE id = 't-1'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(listed, 0);
+    assert_eq!(dead, Some(1000));
+
+    // Repeat detection keeps the ORIGINAL timestamp and is not "new".
+    assert!(!crate::tenant::mark_tenant_dead(&db, "t-1", 2000).await.unwrap());
+    let (dead,): (Option<i64>,) =
+        sqlx::query_as("SELECT dead_since FROM tenant WHERE id = 't-1'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(dead, Some(1000), "first detection time survives repeats");
+}
+
+#[tokio::test]
+async fn mark_tenant_needs_password_gates_and_drops_stale_token() {
+    let db = test_db().await;
+    insert_tenant(&db, "t-1", "key-1", 0).await;
+    sqlx::query("UPDATE tenant SET share_token = 'stale-token' WHERE id = 't-1'")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    crate::tenant::mark_tenant_needs_password(&db, "t-1").await.unwrap();
+    let (needs, token): (i64, String) =
+        sqlx::query_as("SELECT needs_password, share_token FROM tenant WHERE id = 't-1'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(needs, 1);
+    assert_eq!(token, "", "rejected token is cleared so the gate re-prompts");
+}
+
+#[tokio::test]
+async fn clear_tenant_dead_nulls_marker_but_not_listed() {
+    let db = test_db().await;
+    insert_tenant(&db, "t-1", "key-1", 0).await;
+    crate::tenant::mark_tenant_dead(&db, "t-1", 1000).await.unwrap();
+
+    crate::tenant::clear_tenant_dead(&db, "t-1").await.unwrap();
+    let (listed, dead): (i64, Option<i64>) =
+        sqlx::query_as("SELECT listed, dead_since FROM tenant WHERE id = 't-1'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(dead, None);
+    assert_eq!(listed, 0, "relisting stays a human decision");
+}
+
+#[tokio::test]
+async fn dead_tenant_disappears_from_public_index() {
+    let db = test_db().await;
+    insert_tenant(&db, "t-1", "key-1", 0).await;
+    insert_tenant(&db, "t-2", "key-2", 0).await;
+    assert_eq!(crate::routes::albums::listed_albums(&db).await.unwrap().len(), 2);
+
+    crate::tenant::mark_tenant_dead(&db, "t-1", 1000).await.unwrap();
+    let rows = crate::routes::albums::listed_albums(&db).await.unwrap();
+    assert_eq!(rows.len(), 1, "dead tenant is delisted");
+    assert_eq!(rows[0].key, "key-2");
+}
+
 #[tokio::test]
 async fn purge_tenant_removes_all_tenant_data_and_nothing_else() {
     let db = test_db().await;
