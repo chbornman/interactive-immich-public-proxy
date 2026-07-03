@@ -24,6 +24,8 @@
   const MOBILE_MQ = '(max-width: 819px)';
 
   let pswp: PhotoSwipe | null = null;
+  /** Root grid element, fullscreened by the F key. */
+  let lbEl: HTMLDivElement | null = null;
   /** Stage grid cell that PhotoSwipe mounts into (via appendToEl). */
   let stageEl: HTMLDivElement | null = null;
   let ro: ResizeObserver | null = null;
@@ -35,6 +37,8 @@
   /** True while closing to hand off to the slideshow, so we don't scroll the grid. */
   let handingOff = false;
   let currentAsset: Asset | null = null;
+  /** Current slide index, mirrored for the header position counter. */
+  let curIndex = 0;
   let isMobile = false;
   let sheetOpen = false;
   let showInfo = false;
@@ -168,6 +172,12 @@
     // pswp's keydown is document-level and focus-agnostic: stand down while a
     // field or a video's native controls own the keys (Esc/arrows/z).
     pswp.on('keydown', (e) => {
+      // In fullscreen, Esc should only exit fullscreen (the browser handles
+      // that natively), not also close the lightbox.
+      if (e.originalEvent.key === 'Escape' && document.fullscreenElement) {
+        e.preventDefault();
+        return;
+      }
       const t = e.originalEvent.target as HTMLElement | null;
       if (!t) return;
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'VIDEO' || t.isContentEditable) {
@@ -256,6 +266,7 @@
           v.currentTime = 0;
         }
       }
+      curIndex = idx;
       currentAsset = items[idx] ?? null;
       if (currentAsset) loadMeta(currentAsset);
     });
@@ -283,22 +294,41 @@
     // init() reassigns offset.y directly (no updateScrollOffset dispatch), so
     // re-sync deterministically instead of relying on the RO's initial fire.
     syncStageOffset();
+    curIndex = index;
     currentAsset = items[index] ?? null;
     if (currentAsset) loadMeta(currentAsset);
   }
 
   // PhotoSwipe's built-in keyboard nav handles arrows (navigate) and Escape (close);
-  // we add only Space to toggle the current video (native <video> needs focus otherwise).
+  // we add Space (toggle the current video — native <video> needs focus
+  // otherwise), F (fullscreen, gone from PhotoSwipe since v5), M (mark), and
+  // Home/End (jump to first/last).
+  const OWN_KEYS = [' ', 'f', 'F', 'm', 'M', 'Home', 'End'];
   function onKey(e: KeyboardEvent) {
-    if (e.key !== ' ') return;
+    if (!OWN_KEYS.includes(e.key)) return;
     const el = e.target as HTMLElement | null;
-    // Don't hijack Space while typing a note, or while the video itself has
-    // focus (its native controls already toggle; avoid a double toggle).
+    // Don't hijack keys while typing a note, or while the video itself has
+    // focus (its native controls already handle them; avoid a double toggle).
     if (
       el &&
       (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'VIDEO' || el.isContentEditable)
     )
       return;
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
+    if (e.key === 'm' || e.key === 'M') {
+      e.preventDefault();
+      onToggleMark();
+      return;
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      pswp?.goTo(e.key === 'Home' ? 0 : items.length - 1);
+      return;
+    }
     const video = pswp?.currSlide?.content?.element?.querySelector(
       'video.pswp-video',
     ) as HTMLVideoElement | null;
@@ -306,6 +336,17 @@
     e.preventDefault();
     if (video.paused) playVideo(video);
     else video.pause();
+  }
+
+  /** Fullscreen the whole lightbox (header + stage + notes); the stage's
+      ResizeObserver refits the media automatically. */
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await lbEl?.requestFullscreen?.();
+    } catch {
+      /* fullscreen unavailable — ignore */
+    }
   }
 
   $: if (openIndex !== null && !pswp && !opening) openLightbox(openIndex);
@@ -383,9 +424,10 @@
 </script>
 
 {#if lbOpen}
-  <div class="lb" class:mobile={isMobile}>
+  <div class="lb" class:mobile={isMobile} bind:this={lbEl}>
     <header class="lb-header">
       <span class="fname" title={currentAsset?.filename}>{currentAsset?.filename ?? ''}</span>
+      <span class="pos">{curIndex + 1} / {items.length}</span>
       <button
         class="hbtn mark"
         class:on={meta?.marked}
@@ -504,6 +546,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .pos {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
   .hbtn {
     border: 1px solid var(--border);
     background: var(--bg-elev);
@@ -596,6 +644,7 @@
   }
   .lb-sheet.open {
     height: 62vh; /* row is auto: open sheet takes 62vh, stage shrinks, RO refits the photo */
+    height: 62dvh; /* dynamic-viewport units keep the composer clear of iOS browser chrome */
   }
   .sheet-handle {
     flex: 0 0 auto;

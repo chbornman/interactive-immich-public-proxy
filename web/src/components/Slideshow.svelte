@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
   import { X, CaretLeft, CaretRight, Pause, Play } from 'phosphor-svelte';
   import type { Asset } from '../types';
   import { assetUrl } from '../api';
@@ -27,6 +27,17 @@
   let onEnded: (() => void) | null = null;
   /** True once close() has begun, to make the exit path re-entry-safe. */
   let closing = false;
+  /** Controls fade out after a few idle seconds; any pointer/key brings them back. */
+  let barVisible = true;
+  let barTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function showBar() {
+    barVisible = true;
+    clearTimeout(barTimer);
+    barTimer = setTimeout(() => {
+      barVisible = false;
+    }, 3000);
+  }
 
   $: if (startIndex !== null && items.length > 0 && active === null) {
     begin(startIndex);
@@ -39,8 +50,11 @@
     // Only listen for keys while the slideshow is actually active, so arrow keys
     // in the lightbox never leak in and pop the slideshow open.
     window.addEventListener('keydown', onKey);
-    enterFullscreen();
+    showBar();
     mountSlide();
+    // .slide-host only mounts once `active` is set, so the fullscreen request
+    // must wait for the bind (still within the launching click's activation).
+    void tick().then(enterFullscreen);
   }
 
   async function enterFullscreen() {
@@ -73,6 +87,9 @@
     isVideo = active.kind === 'VIDEO';
     // Wait for Svelte to mount the video element (or image) before wiring events.
     queueMicrotask(attachMediaHandlers);
+    // Preload the next slide's image (or video poster) so advancing never flashes.
+    const next = items[(index + 1) % items.length];
+    if (next) new Image().src = assetUrl(next.id, 'preview');
   }
 
   /** Remove any tracked video listener and pause the current video element. */
@@ -143,6 +160,7 @@
     if (closing) return;
     closing = true;
     clearTimeout(timer);
+    clearTimeout(barTimer);
     teardownMedia();
     window.removeEventListener('keydown', onKey);
     exitFullscreen();
@@ -153,6 +171,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    showBar();
     if (e.key === 'Escape') {
       e.preventDefault();
       close();
@@ -165,6 +184,10 @@
     } else if (e.key === ' ') {
       e.preventDefault();
       togglePlay();
+    } else if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      if (document.fullscreenElement) exitFullscreen();
+      else enterFullscreen();
     }
   }
 
@@ -177,13 +200,15 @@
 
   onDestroy(() => {
     clearTimeout(timer);
+    clearTimeout(barTimer);
     document.removeEventListener('fullscreenchange', fsChangeHandler);
     window.removeEventListener('keydown', onKey);
   });
 </script>
 
 {#if active}
-  <div class="slide-host" bind:this={host}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="slide-host" bind:this={host} on:pointermove={showBar}>
     {#if isVideo}
       <video
         bind:this={videoEl}
@@ -199,7 +224,7 @@
       <img class="media" src={assetUrl(active.id, 'preview')} alt={active.filename} />
     {/if}
 
-    <div class="bar">
+    <div class="bar" class:faded={!barVisible}>
       <button class="bbtn" on:click={prev} title="Previous" aria-label="Previous"><CaretLeft size={18} weight="bold" /></button>
       <button class="bbtn" on:click={togglePlay} title={running ? 'Pause' : 'Play'} aria-label={running ? 'Pause' : 'Play'}>
         {#if running}<Pause size={18} weight="fill" />{:else}<Play size={18} weight="fill" />{/if}
@@ -239,12 +264,18 @@
     left: 0;
     right: 0;
     bottom: 0;
+    transition: opacity 0.25s ease;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 12px max(16px, env(safe-area-inset-left, 0)) calc(12px + env(safe-area-inset-bottom, 0)) max(16px, env(safe-area-inset-left, 0));
     background: var(--bg-elev);
     border-top: 1px solid var(--border);
+  }
+  /* Idle: controls fade out; any pointer move or key brings them back. */
+  .bar.faded {
+    opacity: 0;
+    pointer-events: none;
   }
   .bbtn {
     display: inline-flex;
