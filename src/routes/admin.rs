@@ -79,6 +79,53 @@ pub async fn patch_tenant(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// Deleted-row counts from purging a tenant: (assets, marks, notes, tenants).
+pub(crate) async fn purge_tenant(
+    db: &sqlx::SqlitePool,
+    id: &str,
+) -> Result<(u64, u64, u64, u64), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    let notes = sqlx::query("DELETE FROM note WHERE tenant_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let marks = sqlx::query("DELETE FROM mark WHERE tenant_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let assets = sqlx::query("DELETE FROM asset WHERE tenant_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let tenants = sqlx::query("DELETE FROM tenant WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    Ok((assets, marks, notes, tenants))
+}
+
+/// DELETE /admin/tenant/:id — remove a dead/stale share entirely: the tenant
+/// row plus its cached assets and all marks/notes made through it. Immich is
+/// untouched (this only forgets the share on the proxy side).
+pub async fn delete_tenant(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let (assets, marks, notes, tenants) = purge_tenant(&st.db, &id).await?;
+    if tenants == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "deleted": { "assets": assets, "marks": marks, "notes": notes }
+    })))
+}
+
 /// POST /admin/tenant/:id/resync
 pub async fn resync(
     State(st): State<AppState>,

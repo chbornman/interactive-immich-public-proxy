@@ -318,3 +318,45 @@ async fn album_index_lists_tenants_with_password_flag() {
         .unwrap();
     assert!(crate::routes::albums::listed_albums(&db).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn purge_tenant_removes_all_tenant_data_and_nothing_else() {
+    let db = test_db().await;
+
+    insert_tenant(&db, "t-dead", "key-dead", 0).await;
+    insert_tenant(&db, "t-live", "key-live", 0).await;
+    insert_asset(&db, "t-dead", "a-1", "IMAGE", 100).await;
+    insert_asset(&db, "t-dead", "a-2", "VIDEO", 200).await;
+    insert_asset(&db, "t-live", "b-1", "IMAGE", 100).await;
+    sqlx::query("INSERT INTO mark (tenant_id, asset_id, visitor_id, created_at) VALUES ('t-dead', 'a-1', 'v', 1)")
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO mark (tenant_id, asset_id, visitor_id, created_at) VALUES ('t-live', 'b-1', 'v', 1)")
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO note (tenant_id, asset_id, visitor_id, body, created_at) VALUES ('t-dead', 'a-1', 'v', 'hi', 1)")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let (assets, marks, notes, tenants) =
+        crate::routes::admin::purge_tenant(&db, "t-dead").await.unwrap();
+    assert_eq!((assets, marks, notes, tenants), (2, 1, 1, 1));
+
+    // The other tenant's data is untouched.
+    let live: (i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM asset WHERE tenant_id = 't-live'), \
+                (SELECT COUNT(*) FROM mark WHERE tenant_id = 't-live'), \
+                (SELECT COUNT(*) FROM tenant WHERE id = 't-live')",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(live, (1, 1, 1));
+
+    // Purging an unknown id deletes nothing (handler turns this into 404).
+    let (_, _, _, tenants) = crate::routes::admin::purge_tenant(&db, "nope").await.unwrap();
+    assert_eq!(tenants, 0);
+}

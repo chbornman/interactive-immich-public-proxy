@@ -40,7 +40,7 @@ pub fn router(st: AppState) -> Router {
     // Admin API — gated by Authentik forward-auth at Caddy (no visitor cookie).
     let admin = Router::new()
         .route("/tenants", get(admin::tenants))
-        .route("/tenant/{id}", patch(admin::patch_tenant))
+        .route("/tenant/{id}", patch(admin::patch_tenant).delete(admin::delete_tenant))
         .route("/tenant/{id}/resync", post(admin::resync))
         .route("/notes", get(admin::notes))
         .route("/note/{id}/hide", post(admin::hide_note))
