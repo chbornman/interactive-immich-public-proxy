@@ -179,6 +179,28 @@ fn unlock_cookie_shape_and_domain_separation() {
 }
 
 // ---------------------------------------------------------------------------
+// immich: EXIF orientation → dimension swap
+// ---------------------------------------------------------------------------
+
+/// Orientations 5-8 rotate 90°/270°, so cached dimensions must swap (iPhone
+/// HEICs ship orientation "6" with sensor-landscape exif dims). Values seen in
+/// production: strings '0'/'1'/'3'/'6'/'8' and absent.
+#[test]
+fn exif_orientation_rotation_detection() {
+    let e = |o: serde_json::Value| Some(serde_json::json!({ "orientation": o }));
+    assert!(crate::immich::is_rotated_orientation(&e("6".into())));
+    assert!(crate::immich::is_rotated_orientation(&e("8".into())));
+    assert!(crate::immich::is_rotated_orientation(&e(5.into())));
+    assert!(crate::immich::is_rotated_orientation(&e(7.into())));
+    assert!(!crate::immich::is_rotated_orientation(&e("1".into())));
+    assert!(!crate::immich::is_rotated_orientation(&e("3".into())));
+    assert!(!crate::immich::is_rotated_orientation(&e("0".into())));
+    assert!(!crate::immich::is_rotated_orientation(&e("garbage".into())));
+    assert!(!crate::immich::is_rotated_orientation(&Some(serde_json::json!({}))));
+    assert!(!crate::immich::is_rotated_orientation(&None));
+}
+
+// ---------------------------------------------------------------------------
 // download: safe_name
 // ---------------------------------------------------------------------------
 

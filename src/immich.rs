@@ -73,6 +73,19 @@ struct AssetDto {
 fn exif_i64(e: &Option<serde_json::Value>, key: &str) -> Option<i64> {
     e.as_ref()?.get(key)?.as_i64()
 }
+
+/// EXIF orientations 5-8 are 90°/270° rotations: Immich reports the SENSOR
+/// dimensions but renders previews rotated, so width/height must be swapped
+/// (classic on iPhone HEICs, orientation "6"). Immich stores the value as a
+/// string; accept a bare number too.
+pub(crate) fn is_rotated_orientation(e: &Option<serde_json::Value>) -> bool {
+    let o = match e.as_ref().and_then(|v| v.get("orientation")) {
+        Some(v) => v,
+        None => return false,
+    };
+    let code = o.as_i64().or_else(|| o.as_str().and_then(|s| s.trim().parse::<i64>().ok()));
+    matches!(code, Some(5..=8))
+}
 fn exif_str(e: &Option<serde_json::Value>, key: &str) -> Option<String> {
     e.as_ref()?
         .get(key)?
@@ -239,7 +252,10 @@ impl ImmichClient {
             .map(|a| {
                 let w = exif_i64(&a.exif_info, "exifImageWidth").unwrap_or(0);
                 let h = exif_i64(&a.exif_info, "exifImageHeight").unwrap_or(0);
-                let (width, height) = if w > 0 && h > 0 { (w, h) } else { (3, 2) };
+                let (mut width, mut height) = if w > 0 && h > 0 { (w, h) } else { (3, 2) };
+                if is_rotated_orientation(&a.exif_info) {
+                    (width, height) = (height, width);
+                }
 
                 let mut taken = parse_ts(&a.file_created_at);
                 if taken == 0 {
