@@ -42,6 +42,8 @@
     const targetIndex = galleryScrollTarget;
     // Wait a frame so the justified layout is settled before measuring.
     requestAnimationFrame(() => {
+      // containerEl is nulled by Svelte if we unmount before the frame fires.
+      if (!containerEl) return;
       const tiles = containerEl.querySelectorAll('.tile');
       const target = tiles[targetIndex];
       // No-op if the target tile isn't present (e.g. filtered out).
