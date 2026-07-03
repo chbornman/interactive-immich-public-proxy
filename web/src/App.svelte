@@ -26,6 +26,9 @@
   let cursor = '';
   let nextCursor: string | null = '';
   let loading = false;
+  // Monotonic load id: each loadMore() takes a snapshot so a stale in-flight
+  // response (from a since-superseded filter) can be dropped instead of applied.
+  let loadSeq = 0;
   let fatalError = '';
   let passwordRequired = false;
   let unlockBusy = false;
@@ -61,14 +64,19 @@
     assets = [];
     cursor = '';
     nextCursor = '';
+    // Release the in-flight guard so this newest reset isn't dropped by loadMore's
+    // `if (loading) return` — the loadSeq bump below invalidates the old request.
+    loading = false;
     await loadMore();
   }
 
   async function loadMore() {
     if (loading || nextCursor === null) return;
     loading = true;
+    const seq = ++loadSeq;
     try {
       const page = await getAssets({ cursor, limit: PAGE, filter, kind, q: query });
+      if (seq !== loadSeq) return; // a newer load superseded this one — drop the response
       // Guard against duplicate ids if the backend overlaps pages.
       const seen = new Set(assets.map((a) => a.id));
       const fresh = page.items.filter((a) => !seen.has(a.id));
@@ -76,6 +84,7 @@
       nextCursor = page.nextCursor;
       cursor = page.nextCursor ?? '';
     } catch (e) {
+      if (seq !== loadSeq) return; // stale failure — the current load owns the error state
       if (e instanceof ApiError && e.passwordRequired) {
         passwordRequired = true;
       } else if (e instanceof ApiError && e.status === 404 && assets.length === 0) {
@@ -85,7 +94,7 @@
       }
       nextCursor = null; // stop infinite scroll on error
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 
@@ -167,6 +176,29 @@
 
   function onActivate(e: CustomEvent<{ asset: Asset; index: number }>) {
     openIndex = e.detail.index;
+  }
+
+  /** Scroll target for Gallery after lightbox/slideshow closes. */
+  let galleryScrollTarget: number | null = null;
+
+  /** Scroll the grid to `index`, then clear the target after the animation. */
+  function scrollGridTo(index: number) {
+    galleryScrollTarget = index;
+    setTimeout(() => {
+      galleryScrollTarget = null;
+    }, 800);
+  }
+
+  function onLightboxClose(e: CustomEvent<{ index: number }>) {
+    // Return to the grid at the last photo viewed in the lightbox.
+    scrollGridTo(e.detail.index);
+  }
+
+  function onSlideshowClose(e: CustomEvent<{ index: number }>) {
+    stopSlideshow();
+    // The slideshow is always the sole overlay (launching it closes the lightbox),
+    // so closing it always returns to the grid at the last-viewed photo.
+    scrollGridTo(e.detail.index);
   }
 
   let slideshowLoading = false;
@@ -280,6 +312,7 @@
     {selectMode}
     {selectedIds}
     targetRowHeight={tileSize}
+    {galleryScrollTarget}
     on:loadMore={loadMore}
     on:activate={onActivate}
     on:toggleSelect={onToggleSelect}
@@ -291,6 +324,7 @@
     {visitorName}
     on:assetchange={onAssetChange}
     on:slideshow={(e) => startSlideshow(e.detail.index)}
+    on:close={onLightboxClose}
     on:setname={onSetName}
   />
 
@@ -298,7 +332,7 @@
     items={assets}
     bind:startIndex={slideshowStart}
     loading={slideshowLoading}
-    on:close={stopSlideshow}
+    on:close={onSlideshowClose}
   />
   {/if}
 </main>

@@ -12,6 +12,8 @@
   export let selectMode = false;
   export let selectedIds: Set<string> = new Set();
   export let targetRowHeight = 220;
+  /** Index to scroll to after render (used when returning from lightbox/slideshow). */
+  export let galleryScrollTarget: number | null = null;
 
   const dispatch = createEventDispatcher<{
     loadMore: void;
@@ -34,6 +36,18 @@
     targetRowHeight,
     gap: GAP,
   });
+
+  /** Scroll to the tile at galleryScrollTarget after the gallery re-renders. */
+  $: if (galleryScrollTarget !== null && assets.length > 0 && containerEl) {
+    const targetIndex = galleryScrollTarget;
+    // Wait a frame so the justified layout is settled before measuring.
+    requestAnimationFrame(() => {
+      const tiles = containerEl.querySelectorAll('.tile');
+      const target = tiles[targetIndex];
+      // No-op if the target tile isn't present (e.g. filtered out).
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
 
   function onActivate(asset: Asset) {
     if (selectMode) {
@@ -135,7 +149,7 @@
     );
     background-size: 200% 100%;
     animation: shimmer 1.3s infinite linear;
-    border-radius: 4px;
+    border-radius: var(--radius);
   }
   @keyframes shimmer {
     0% {

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy } from 'svelte';
+  import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import PhotoSwipe from 'photoswipe';
   import 'photoswipe/style.css';
-  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp, Play } from 'phosphor-svelte';
+  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp, ProjectorScreen } from 'phosphor-svelte';
   import type { Asset, AssetMeta } from '../types';
   import { assetUrl, getAssetMeta, toggleMark, addNote, downloadAssets, supportsShareFiles } from '../api';
   import NotesPanel from './NotesPanel.svelte';
@@ -16,14 +16,24 @@
   const dispatch = createEventDispatcher<{
     assetchange: { id: string; markCount: number; hasNote: boolean };
     slideshow: { index: number };
+    close: { index: number };
+    setname: { name: string };
   }>();
 
-  const HEADER = 56;
-  const SIDEBAR = 360;
-  const HANDLE = 44;
-  const MOBILE_MAX = 819;
+  /** The only place the breakpoint exists; CSS keys off the .mobile class. */
+  const MOBILE_MQ = '(max-width: 819px)';
 
   let pswp: PhotoSwipe | null = null;
+  /** Stage grid cell that PhotoSwipe mounts into (via appendToEl). */
+  let stageEl: HTMLDivElement | null = null;
+  let ro: ResizeObserver | null = null;
+  let mql: MediaQueryList | null = null;
+  /** True while the shell is mounted; pswp lives inside it. */
+  let lbOpen = false;
+  /** Guards the reactive open gate across the tick between mount and pswp.init(). */
+  let opening = false;
+  /** True while closing to hand off to the slideshow, so we don't scroll the grid. */
+  let handingOff = false;
   let currentAsset: Asset | null = null;
   let isMobile = false;
   let sheetOpen = false;
@@ -70,20 +80,23 @@
     }
   }
 
-  function paddingFn() {
-    if (isMobile) {
-      // Full bleed on mobile: zero side margins, reserve header + bottom handle.
-      return { top: HEADER, bottom: HANDLE, left: 0, right: 0 };
-    }
-    return { top: HEADER, bottom: 8, left: 8, right: SIDEBAR };
+  /**
+   * PhotoSwipe gestures compute pageX/pageY minus pswp.offset and assume the
+   * viewport starts at the page origin. Contained in the stage cell, rewrite
+   * the offset from the cell's page coordinates (undocumented internal, but
+   * the updateScrollOffset listener runs after the stock assignment and is
+   * allowed to mutate instance state).
+   */
+  function syncStageOffset() {
+    if (!pswp || !stageEl) return;
+    const r = stageEl.getBoundingClientRect();
+    pswp.offset.x = r.left + window.scrollX;
+    pswp.offset.y = r.top + window.scrollY;
   }
 
-  function updateMobile() {
-    const m = window.innerWidth <= MOBILE_MAX;
-    if (m !== isMobile) {
-      isMobile = m;
-      pswp?.updateSize(true);
-    }
+  function onMqlChange(e: MediaQueryListEvent) {
+    // Swapping sidebar<->sheet resizes the stage cell; the ResizeObserver refits.
+    isMobile = e.matches;
   }
 
   async function loadMeta(asset: Asset) {
@@ -101,20 +114,100 @@
     }
   }
 
+  async function openLightbox(index: number) {
+    opening = true;
+    // Resolve the breakpoint BEFORE mounting so the shell renders the correct
+    // grid template and pswp.init() measures the real stage cell (a phone must
+    // never mount the desktop 360px sidebar, even for one tick).
+    mql = window.matchMedia(MOBILE_MQ);
+    isMobile = mql.matches;
+    mql.addEventListener('change', onMqlChange);
+    // Mount the shell so the stage cell exists (and has its grid size) before
+    // pswp.init() measures it.
+    lbOpen = true;
+    await tick();
+    try {
+      open(index);
+    } catch {
+      /* unwound below */
+    }
+    if (!pswp) {
+      // Failed to initialize: unwind so the page isn't left scroll-locked and
+      // the reactive gate doesn't respin on a null pswp.
+      lbOpen = false;
+      openIndex = null;
+      document.body.style.overflow = '';
+      mql.removeEventListener('change', onMqlChange);
+      mql = null;
+    }
+    opening = false;
+  }
+
   function open(index: number) {
-    if (pswp) return;
-    isMobile = window.innerWidth <= MOBILE_MAX;
+    if (pswp || !stageEl) return;
+    const stage = stageEl;
     sheetOpen = false;
+    handingOff = false;
+    // Lock the page behind the lightbox: no scroll-behind, and the stage's
+    // page offset stays put for the gesture math in syncStageOffset.
+    document.body.style.overflow = 'hidden';
 
     pswp = new PhotoSwipe({
       dataSource: buildDataSource(items),
       index,
+      appendToEl: stage,
+      getViewportSizeFn: () => ({ x: stage.clientWidth, y: stage.clientHeight }),
       bgOpacity: 1,
       showHideAnimationType: 'fade',
       trapFocus: false,
       wheelToZoom: true,
-      paddingFn,
     });
+
+    pswp.on('updateScrollOffset', syncStageOffset);
+
+    // pswp's keydown is document-level and focus-agnostic: stand down while a
+    // field or a video's native controls own the keys (Esc/arrows/z).
+    pswp.on('keydown', (e) => {
+      const t = e.originalEvent.target as HTMLElement | null;
+      if (!t) return;
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'VIDEO' || t.isContentEditable) {
+        e.preventDefault();
+      }
+    });
+
+    // Stage resizes during the ~333ms opening fade are only half-applied
+    // (updateSize skips slide.resize until the opener reports open) — replay
+    // the final size once the animation completes.
+    pswp.on('openingAnimationEnd', () => {
+      pswp?.updateSize(true);
+      syncStageOffset();
+    });
+
+    // The built-in wheel zoom anchors on window-client coordinates and ignores
+    // pswp.offset — contained, that drifts the zoom point by the stage's page
+    // offset. Reproduce the stock zoom math with a stage-relative center.
+    pswp.on('wheel', (e) => {
+      const ev = e.originalEvent;
+      const slide = pswp?.currSlide;
+      if (!slide || !slide.isZoomable()) return;
+      e.preventDefault();
+      let zoomFactor = -ev.deltaY;
+      if (ev.deltaMode === 1) zoomFactor *= 0.05;
+      else zoomFactor *= ev.deltaMode ? 1 : 0.002;
+      const r = stage.getBoundingClientRect();
+      slide.zoomTo(slide.currZoomLevel * 2 ** zoomFactor, {
+        x: ev.clientX - r.left,
+        y: ev.clientY - r.top,
+      });
+    });
+
+    // Cell resizes that never fire window.resize (sheet open/close, breakpoint
+    // flip): upstream updateSize is only wired to window resize.
+    ro = new ResizeObserver(() => {
+      pswp?.updateSize(true);
+      syncStageOffset();
+    });
+    ro.observe(stage);
 
     pswp.on('contentLoad', (e) => {
       const data = e.content.data as { html?: string };
@@ -139,8 +232,12 @@
     pswp.on('contentActivate', (e) => {
       const video = e.content.element?.querySelector('video.pswp-video') as HTMLVideoElement | null;
       if (video) {
-        // Defer until the element is ready; canplay may have fired before activation.
-        const tryPlay = () => playVideo(video);
+        // Capture the slide this activation is for; if the user navigates away
+        // before it's ready, a late canplay must not play a now-inactive slide.
+        const activatedIndex = e.content.index;
+        const tryPlay = () => {
+          if (pswp && pswp.currIndex === activatedIndex) playVideo(video);
+        };
         if (video.readyState >= 2) tryPlay();
         else video.addEventListener('canplay', tryPlay, { once: true });
       }
@@ -148,26 +245,70 @@
 
     pswp.on('change', () => {
       const idx = pswp?.currIndex ?? 0;
+      // Guarantee exactly one video ever plays: pause+reset every slide's video
+      // except the one now active.
+      const activeVideo = pswp?.currSlide?.content?.element?.querySelector(
+        'video.pswp-video',
+      ) as HTMLVideoElement | null;
+      for (const v of document.querySelectorAll<HTMLVideoElement>('video.pswp-video')) {
+        if (v !== activeVideo) {
+          v.pause();
+          v.currentTime = 0;
+        }
+      }
       currentAsset = items[idx] ?? null;
       if (currentAsset) loadMeta(currentAsset);
     });
 
     pswp.on('destroy', () => {
+      // Report the last-viewed index so the grid can scroll back to it — unless
+      // we're handing off to the slideshow, which owns the return-to-grid.
+      if (!handingOff) dispatch('close', { index: pswp?.currIndex ?? index });
       pswp = null;
       currentAsset = null;
       meta = null;
       sheetOpen = false;
       openIndex = null;
-      window.removeEventListener('resize', updateMobile);
+      lbOpen = false;
+      ro?.disconnect();
+      ro = null;
+      mql?.removeEventListener('change', onMqlChange);
+      mql = null;
+      document.body.style.overflow = '';
+      window.removeEventListener('keydown', onKey);
     });
 
-    window.addEventListener('resize', updateMobile);
+    window.addEventListener('keydown', onKey);
     pswp.init();
+    // init() reassigns offset.y directly (no updateScrollOffset dispatch), so
+    // re-sync deterministically instead of relying on the RO's initial fire.
+    syncStageOffset();
     currentAsset = items[index] ?? null;
     if (currentAsset) loadMeta(currentAsset);
   }
 
-  $: if (openIndex !== null && !pswp) open(openIndex);
+  // PhotoSwipe's built-in keyboard nav handles arrows (navigate) and Escape (close);
+  // we add only Space to toggle the current video (native <video> needs focus otherwise).
+  function onKey(e: KeyboardEvent) {
+    if (e.key !== ' ') return;
+    const el = e.target as HTMLElement | null;
+    // Don't hijack Space while typing a note, or while the video itself has
+    // focus (its native controls already toggle; avoid a double toggle).
+    if (
+      el &&
+      (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'VIDEO' || el.isContentEditable)
+    )
+      return;
+    const video = pswp?.currSlide?.content?.element?.querySelector(
+      'video.pswp-video',
+    ) as HTMLVideoElement | null;
+    if (!video) return;
+    e.preventDefault();
+    if (video.paused) playVideo(video);
+    else video.pause();
+  }
+
+  $: if (openIndex !== null && !pswp && !opening) openLightbox(openIndex);
 
   function emitChange() {
     if (!currentAsset || !meta) return;
@@ -220,7 +361,11 @@
   function startSlideshow() {
     if (!currentAsset) return;
     const idx = pswp?.currIndex ?? 0;
+    // Hand off to the slideshow as the sole owner: close the lightbox so its
+    // video/keyboard can't keep running underneath (no doubled audio or drift).
+    handingOff = true;
     dispatch('slideshow', { index: idx });
+    pswp?.close();
   }
 
   function toggleInfo() {
@@ -230,12 +375,15 @@
 
   onDestroy(() => {
     pswp?.destroy();
-    window.removeEventListener('resize', updateMobile);
+    ro?.disconnect();
+    mql?.removeEventListener('change', onMqlChange);
+    window.removeEventListener('keydown', onKey);
+    document.body.style.overflow = '';
   });
 </script>
 
-{#if pswp}
-  <div class="lb-chrome">
+{#if lbOpen}
+  <div class="lb" class:mobile={isMobile}>
     <header class="lb-header">
       <span class="fname" title={currentAsset?.filename}>{currentAsset?.filename ?? ''}</span>
       <button
@@ -253,7 +401,7 @@
         <Info size={18} weight={showInfo ? 'fill' : 'regular'} />
       </button>
       <button class="hbtn" on:click={startSlideshow} title="Slideshow" aria-label="Slideshow">
-        <Play size={18} weight="fill" />
+        <ProjectorScreen size={18} />
       </button>
       <button
         class="hbtn"
@@ -268,6 +416,8 @@
       </button>
     </header>
 
+    <div class="lb-stage" bind:this={stageEl}></div>
+
     {#if !isMobile}
       <aside class="lb-side">
         <NotesPanel
@@ -278,6 +428,7 @@
           {showInfo}
           {visitorName}
           on:addNote={onAddNote}
+          on:setname={(e) => dispatch('setname', e.detail)}
         />
       </aside>
     {:else}
@@ -296,6 +447,7 @@
               {showInfo}
               {visitorName}
               on:addNote={onAddNote}
+              on:setname={(e) => dispatch('setname', e.detail)}
             />
           </div>
         {/if}
@@ -305,39 +457,43 @@
 {/if}
 
 <style>
-  /* Solid light stage so the gallery doesn't bleed through; dark icons for arrows. */
-  :global(.pswp) {
-    --pswp-bg: #eceee8;
-    --pswp-icon-color: #2b2e2a;
-    --pswp-icon-color-secondary: #fff;
-    --pswp-icon-stroke-color: #fff;
-  }
-  :global(.pswp__top-bar) {
-    display: none !important;
-  }
-
-  .lb-chrome {
+  /* ---- One source of truth for lightbox geometry ---- */
+  .lb {
+    --lb-side-w: 360px;
+    --lb-stage-bg: #eceee8; /* shared by the stage cell and --pswp-bg: fade never flashes */
     position: fixed;
     inset: 0;
-    z-index: 2000000;
-    pointer-events: none;
+    z-index: 2000000; /* unchanged rung: below NameBanner (3M) and Slideshow (4M) */
+    display: grid;
+    grid-template-areas:
+      'header header'
+      'stage  side';
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) var(--lb-side-w);
+  }
+
+  /* Mobile: three stacked rows. The breakpoint lives ONLY in the JS matchMedia
+     string (MOBILE_MQ); CSS keys off the .mobile class, so JS and CSS cannot drift. */
+  .lb.mobile {
+    grid-template-areas:
+      'header'
+      'stage'
+      'sheet';
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .lb-header {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    min-height: 48px;
+    grid-area: header;
+    min-height: 56px;
     padding-top: env(safe-area-inset-top, 0);
     display: flex;
     align-items: center;
     gap: 8px;
     padding-left: max(10px, env(safe-area-inset-left, 0));
     padding-right: max(10px, env(safe-area-inset-right, 0));
-    background: #fff;
+    background: var(--bg-elev);
     border-bottom: 1px solid var(--border);
-    pointer-events: auto;
   }
   .fname {
     flex: 1;
@@ -360,6 +516,10 @@
     align-items: center;
     justify-content: center;
     gap: 5px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .hbtn:hover:not(:disabled) {
+    background: var(--bg-elev-2);
   }
   .hbtn.on {
     border-color: var(--accent);
@@ -370,32 +530,72 @@
     font-variant-numeric: tabular-nums;
   }
   .hbtn:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  /* ---- The stage cell: the one element PhotoSwipe owns ---- */
+  .lb-stage {
+    grid-area: stage;
+    position: relative; /* containing block for the contained .pswp */
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden; /* clips drag-to-close motion to the cell */
+    background: var(--lb-stage-bg);
+  }
+
+  /* Containment override: photoswipe.css ships .pswp as position:fixed full-
+     viewport; pin it to the stage cell instead. The scoped selector out-
+     specifies the stock .pswp rule, and nothing in pswp JS reads the
+     positioning. Solid stage bg, dark icons for the arrows. */
+  .lb-stage :global(.pswp) {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: auto; /* neutralize --pswp-root-z-index inside the .lb stacking context */
+    --pswp-bg: var(--lb-stage-bg);
+    --pswp-icon-color: #2b2e2a;
+    --pswp-icon-color-secondary: #fff;
+    --pswp-icon-stroke-color: #fff;
+  }
+  .lb-stage :global(.pswp__top-bar) {
+    display: none !important; /* our header replaces it; built-in arrows remain */
+  }
+
+  /* Video (html) slides fill the stage; no padding mirror, geometry is the cell. */
+  .lb-stage :global(.pswp__html-content),
+  .lb-stage :global(.pswp-video-wrap) {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+  }
+  .lb-stage :global(.pswp-video) {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    background: #000;
   }
 
   .lb-side {
-    position: absolute;
-    top: 48px;
-    right: 0;
-    bottom: 0;
-    width: 360px;
+    grid-area: side;
+    min-height: 0;
     border-left: 1px solid var(--border);
     background: var(--bg-elev);
-    pointer-events: auto;
   }
   .lb-side :global(.notes-wrap) {
     height: 100%;
   }
 
   .lb-sheet {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    grid-area: sheet;
     display: flex;
     flex-direction: column;
-    pointer-events: auto;
-    transition: height 0.2s ease;
+  }
+  .lb-sheet.open {
+    height: 62vh; /* row is auto: open sheet takes 62vh, stage shrinks, RO refits the photo */
   }
   .sheet-handle {
     flex: 0 0 auto;
@@ -406,14 +606,11 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-    background: #fff;
+    background: var(--bg-elev);
     color: var(--text);
     border: none;
     border-top: 1px solid var(--border);
     font-size: 14px;
-  }
-  .lb-sheet.open {
-    height: 62vh;
   }
   .sheet-body {
     flex: 1;
@@ -424,34 +621,5 @@
   }
   .sheet-body :global(.notes-wrap) {
     height: 100%;
-  }
-
-  /* Custom (video) content bypasses PhotoSwipe's paddingFn, so mirror the reserved
-     zones here as box-sizing padding to keep video out from under the chrome. */
-  :global(.pswp__html-content) {
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    display: grid;
-    place-items: center;
-    padding: 56px 360px 8px 8px; /* top header, right sidebar (desktop) */
-  }
-  @media (max-width: 819px) {
-    :global(.pswp__html-content) {
-      padding: 56px 0 calc(44px + env(safe-area-inset-bottom, 0)) 0; /* header + bottom handle, full bleed */
-    }
-  }
-  :global(.pswp-video-wrap) {
-    width: 100%;
-    height: 100%;
-    display: grid;
-    place-items: center;
-  }
-  :global(.pswp-video) {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    background: #000;
   }
 </style>

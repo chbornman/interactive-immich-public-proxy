@@ -10,7 +10,7 @@
   /** True while more assets are being fetched in the background. */
   export let loading = false;
 
-  const dispatch = createEventDispatcher<{ close: void }>();
+  const dispatch = createEventDispatcher<{ close: { index: number } }>();
 
   /** Seconds each image is shown. Videos play to their natural end then advance. */
   const IMAGE_DURATION = 5;
@@ -23,6 +23,10 @@
   let isVideo = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let fsChangeHandler: () => void;
+  /** Current video 'ended' listener, tracked so it can be torn down before reuse. */
+  let onEnded: (() => void) | null = null;
+  /** True once close() has begun, to make the exit path re-entry-safe. */
+  let closing = false;
 
   $: if (startIndex !== null && items.length > 0 && active === null) {
     begin(startIndex);
@@ -31,6 +35,10 @@
   function begin(i: number) {
     index = Math.max(0, Math.min(i, items.length - 1));
     running = true;
+    closing = false;
+    // Only listen for keys while the slideshow is actually active, so arrow keys
+    // in the lightbox never leak in and pop the slideshow open.
+    window.addEventListener('keydown', onKey);
     enterFullscreen();
     mountSlide();
   }
@@ -53,6 +61,9 @@
 
   function mountSlide() {
     clearTimeout(timer);
+    // Tear down the outgoing slide's media before switching so listeners can't
+    // stack on the reused <video> element and no audio bleeds across slides.
+    teardownMedia();
     active = items[index] ?? null;
     if (!active) {
       // Index beyond currently-loaded assets (background load in flight) — retry shortly.
@@ -64,12 +75,16 @@
     queueMicrotask(attachMediaHandlers);
   }
 
+  /** Remove any tracked video listener and pause the current video element. */
+  function teardownMedia() {
+    if (onEnded && videoEl) videoEl.removeEventListener('ended', onEnded);
+    onEnded = null;
+    if (videoEl) videoEl.pause();
+  }
+
   function attachMediaHandlers() {
     if (isVideo && videoEl) {
-      const onEnded = () => {
-        videoEl.removeEventListener('ended', onEnded);
-        advance();
-      };
+      onEnded = () => advance();
       videoEl.addEventListener('ended', onEnded);
       videoEl.muted = false;
       videoEl.play().catch((err) => {
@@ -123,12 +138,18 @@
   }
 
   function close() {
+    // Guard re-entry: exitFullscreen() fires fullscreenchange, which calls close()
+    // again — bail if we've already started closing so we don't dispatch twice.
+    if (closing) return;
+    closing = true;
     clearTimeout(timer);
-    if (videoEl) videoEl.pause();
+    teardownMedia();
+    window.removeEventListener('keydown', onKey);
     exitFullscreen();
+    const finalIndex = index;
     active = null;
     startIndex = null;
-    dispatch('close');
+    dispatch('close', { index: finalIndex });
   }
 
   function onKey(e: KeyboardEvent) {
@@ -152,7 +173,6 @@
       if (!document.fullscreenElement) close();
     };
     document.addEventListener('fullscreenchange', fsChangeHandler);
-    window.addEventListener('keydown', onKey);
   });
 
   onDestroy(() => {
@@ -170,7 +190,6 @@
         class="media"
         src={assetUrl(active.id, 'original')}
         poster={assetUrl(active.id, 'preview')}
-        controls
         playsinline
         preload="metadata"
       >
@@ -181,15 +200,15 @@
     {/if}
 
     <div class="bar">
-      <button class="bbtn" on:click={prev} title="Previous" aria-label="Previous"><CaretLeft size={20} weight="bold" /></button>
+      <button class="bbtn" on:click={prev} title="Previous" aria-label="Previous"><CaretLeft size={18} weight="bold" /></button>
       <button class="bbtn" on:click={togglePlay} title={running ? 'Pause' : 'Play'} aria-label={running ? 'Pause' : 'Play'}>
-        {#if running}<Pause size={20} weight="fill" />{:else}<Play size={20} weight="fill" />{/if}
+        {#if running}<Pause size={18} weight="fill" />{:else}<Play size={18} weight="fill" />{/if}
       </button>
-      <button class="bbtn" on:click={next} title="Next" aria-label="Next"><CaretRight size={20} weight="bold" /></button>
+      <button class="bbtn" on:click={next} title="Next" aria-label="Next"><CaretRight size={18} weight="bold" /></button>
       <span class="counter">
         {index + 1} / {items.length}{#if loading} <span class="loading">·</span>{/if}
       </span>
-      <button class="bbtn end" on:click={close} title="Exit slideshow" aria-label="Exit slideshow"><X size={20} /></button>
+      <button class="bbtn end" on:click={close} title="Exit slideshow" aria-label="Exit slideshow"><X size={18} /></button>
     </div>
   </div>
 {/if}
@@ -224,28 +243,30 @@
     align-items: center;
     gap: 8px;
     padding: 12px max(16px, env(safe-area-inset-left, 0)) calc(12px + env(safe-area-inset-bottom, 0)) max(16px, env(safe-area-inset-left, 0));
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.7), transparent);
+    background: var(--bg-elev);
+    border-top: 1px solid var(--border);
   }
   .bbtn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 42px;
-    height: 42px;
-    border: none;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.15);
-    color: #fff;
-    backdrop-filter: blur(4px);
+    height: 34px;
+    min-width: 34px;
+    padding: 0 9px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--text);
+    border-radius: var(--radius);
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
-  .bbtn:hover {
-    background: rgba(255, 255, 255, 0.28);
+  .bbtn:hover:not(:disabled) {
+    background: var(--bg-elev-2);
   }
   .bbtn.end {
     margin-left: auto;
   }
   .counter {
-    color: #fff;
+    color: var(--text-dim);
     font-size: 14px;
     font-variant-numeric: tabular-nums;
     margin-left: 8px;
