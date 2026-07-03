@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { LockKey } from 'phosphor-svelte';
+  import { focusOnMount } from '../actions';
 
   export let error = '';
   export let busy = false;
@@ -25,6 +26,7 @@
       placeholder="Album password"
       autocomplete="current-password"
       aria-label="Album password"
+      use:focusOnMount
     />
     <button type="submit" disabled={busy || !password}>
       {busy ? 'Unlocking…' : 'Unlock'}
@@ -79,6 +81,10 @@
     color: #fff;
     border-radius: var(--radius);
     padding: 9px 12px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  button:hover:not(:disabled) {
+    background: var(--accent-strong);
   }
   button:disabled {
     opacity: 0.5;

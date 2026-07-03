@@ -65,7 +65,7 @@
     padding: 0;
     border: none;
     background: var(--bg-elev);
-    border-radius: 4px;
+    border-radius: var(--radius);
     overflow: hidden;
     display: block;
     flex: none;

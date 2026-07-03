@@ -311,13 +311,17 @@
     color: #fff;
     border-radius: var(--radius);
     padding: 7px 14px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .composer .primary:hover:not(:disabled) {
+    background: var(--accent-strong);
   }
   .composer .primary:disabled {
     opacity: 0.5;
     cursor: default;
   }
   textarea:disabled {
-    opacity: 0.55;
+    opacity: 0.5;
     cursor: default;
   }
   .name-prompt {
@@ -364,6 +368,10 @@
     border-radius: var(--radius);
     padding: 6px 12px;
     font: inherit;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .np-save:hover:not(:disabled) {
+    background: var(--accent-strong);
   }
   .np-save:disabled {
     opacity: 0.5;

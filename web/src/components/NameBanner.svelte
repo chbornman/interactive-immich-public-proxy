@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { setVisitorName } from '../api';
+  import { focusOnMount } from '../actions';
 
   export let visible = false;
   export let current = '';
@@ -68,6 +69,7 @@
         on:keydown={onKey}
         maxlength="60"
         aria-label="Display name"
+        use:focusOnMount
       />
       {#if error}<span class="error">{error}</span>{/if}
       <div class="actions">
@@ -142,6 +144,10 @@
     background: var(--accent);
     border-color: var(--accent);
     color: #fff;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  button.primary:hover:not(:disabled) {
+    background: var(--accent-strong);
   }
   button.primary:disabled {
     opacity: 0.5;

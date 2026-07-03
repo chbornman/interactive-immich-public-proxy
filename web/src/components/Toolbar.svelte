@@ -15,7 +15,7 @@
     Stack,
     Export,
     GithubLogo,
-    Play,
+    ProjectorScreen,
   } from 'phosphor-svelte';
   import type { FilterName, KindFilter } from '../types';
   import { supportsShareFiles } from '../api';
@@ -56,6 +56,21 @@
   let localQuery = query;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Coalesce slider input to one dispatch per frame so the grid relayouts once
+  // per paint instead of on every input tick (the 300ms debounce would feel laggy).
+  let sizeRaf: number | undefined;
+  let pendingSize = tileSize;
+
+  function onSizeInput(e: Event & { currentTarget: HTMLInputElement }) {
+    pendingSize = Number(e.currentTarget.value);
+    if (sizeRaf === undefined) {
+      sizeRaf = requestAnimationFrame(() => {
+        sizeRaf = undefined;
+        dispatch('size', { value: pendingSize });
+      });
+    }
+  }
+
   function onInput() {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => dispatch('search', { q: localQuery.trim() }), 300);
@@ -72,7 +87,10 @@
     dispatch('kind', { kind: k });
   }
 
-  onDestroy(() => clearTimeout(debounceTimer));
+  onDestroy(() => {
+    clearTimeout(debounceTimer);
+    if (sizeRaf !== undefined) cancelAnimationFrame(sizeRaf);
+  });
 </script>
 
 <header class="toolbar">
@@ -130,7 +148,7 @@
       max="380"
       step="10"
       value={tileSize}
-      on:input={(e) => dispatch('size', { value: Number(e.currentTarget.value) })}
+      on:input={onSizeInput}
       aria-label="Thumbnail size"
     />
     <Square size={16} weight="bold" />
@@ -159,7 +177,7 @@
       </button>
     {/if}
     <button on:click={() => dispatch('slideshow')} title="Slideshow" aria-label="Slideshow">
-      <Play size={16} weight="fill" />
+      <ProjectorScreen size={16} />
       <span class="label">Slideshow</span>
     </button>
     <button class:active={selectMode} on:click={() => dispatch('toggleSelect')} title="Select">
@@ -194,7 +212,7 @@
     gap: 8px 10px;
     padding: 8px max(10px, env(safe-area-inset-left, 0)) 8px max(10px, env(safe-area-inset-left, 0));
     padding-top: calc(8px + env(safe-area-inset-top, 0));
-    background: #fff;
+    background: var(--bg-elev);
     border-bottom: 1px solid var(--border);
   }
   .title-block {
@@ -236,6 +254,10 @@
     padding: 6px 10px;
     border-radius: calc(var(--radius) - 2px);
     font-size: 13px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .filters button:not(.active):hover:not(:disabled) {
+    background: var(--bg-elev-2);
   }
   .filters button.active {
     background: var(--accent);
@@ -298,6 +320,10 @@
     padding: 7px 12px;
     border-radius: var(--radius);
     font-size: 13px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .actions button:hover:not(:disabled) {
+    background: var(--bg-elev-2);
   }
   .actions button.active {
     border-color: var(--accent);
@@ -308,12 +334,15 @@
     border-color: var(--accent);
     color: #fff;
   }
+  .actions button.primary:hover:not(:disabled) {
+    background: var(--accent-strong);
+  }
   .actions button.mark-btn {
     border-color: var(--accent);
     color: var(--accent);
   }
   .actions button:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: default;
   }
   .src-link {
