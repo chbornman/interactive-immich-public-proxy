@@ -169,22 +169,20 @@
 
     pswp.on('updateScrollOffset', syncStageOffset);
 
-    // pswp's keydown is document-level and focus-agnostic: stand down while a
-    // field or a video's native controls own the keys (Esc/arrows/z).
+    // pswp's keydown is document-level and focus-agnostic: stand down only
+    // while typing in a field. A focused video does NOT get the arrows —
+    // arrows always navigate slides, and pswp's own preventDefault suppresses
+    // the native 5s seek.
     pswp.on('keydown', (e) => {
-      const key = e.originalEvent.key;
       // In fullscreen, Esc should only exit fullscreen (the browser handles
       // that natively), not also close the lightbox.
-      if (key === 'Escape' && document.fullscreenElement) {
+      if (e.originalEvent.key === 'Escape' && document.fullscreenElement) {
         e.preventDefault();
         return;
       }
       const t = e.originalEvent.target as HTMLElement | null;
       if (!t) return;
-      const typing = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
-      // A focused video owns playback keys (Space, seek arrows) but NOT Esc —
-      // clicking the native controls focuses it, and Esc must still close.
-      if (typing || (t.tagName === 'VIDEO' && key !== 'Escape')) {
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) {
         e.preventDefault();
       }
     });
@@ -312,13 +310,12 @@
   function onKey(e: KeyboardEvent) {
     if (!OWN_KEYS.includes(e.key)) return;
     const el = e.target as HTMLElement | null;
-    // Don't hijack keys while typing a note, or while the video itself has
-    // focus (its native controls already handle them; avoid a double toggle).
-    if (
-      el &&
-      (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'VIDEO' || el.isContentEditable)
-    )
-      return;
+    // Don't hijack keys while typing a note.
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    // A focused video keeps only Space (native play/pause — avoids a double
+    // toggle). Everything else stays ours, so the native video shortcuts
+    // (f fullscreen, m mute, Home/End seek) can't shadow the gallery's keys.
+    if (el && el.tagName === 'VIDEO' && e.key === ' ') return;
     if (e.key === '?') {
       e.preventDefault();
       showHelp = !showHelp;

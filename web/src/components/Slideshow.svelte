@@ -170,6 +170,14 @@
     dispatch('close', { index: finalIndex });
   }
 
+  /** Click/tap the media toggles playback (video-player convention) and
+      recalls the faded control bar — the only recall touch users have. */
+  function onHostClick(e: MouseEvent) {
+    if ((e.target as HTMLElement | null)?.closest('.bar')) return;
+    showBar();
+    togglePlay();
+  }
+
   function onKey(e: KeyboardEvent) {
     showBar();
     if (e.key === 'Escape') {
@@ -207,8 +215,8 @@
 </script>
 
 {#if active}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="slide-host" bind:this={host} on:pointermove={showBar}>
+  <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+  <div class="slide-host" bind:this={host} on:pointermove={showBar} on:click={onHostClick}>
     {#if isVideo}
       <video
         bind:this={videoEl}

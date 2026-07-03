@@ -64,6 +64,14 @@
     }
   }
 
+  /** Enter submits the note (chat convention); Shift+Enter inserts a newline. */
+  function onComposerKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!noteBusy && !needsName) submitNote();
+    }
+  }
+
   function displayName(n: Note): string {
     return n.name && n.name.trim() ? n.name : 'Anonymous';
   }
@@ -167,6 +175,8 @@
             on:blur={() => (nameFocused = false)}
             maxlength="60"
             aria-label="Display name"
+            autocomplete="name"
+            enterkeyhint="done"
           />
           <button class="np-save" on:click={saveName} disabled={nameBusy || !nameDraft.trim()}>
             {nameBusy ? 'Saving…' : 'Save'}
@@ -181,6 +191,8 @@
       rows="2"
       maxlength="2000"
       disabled={needsName}
+      enterkeyhint="send"
+      on:keydown={onComposerKey}
     ></textarea>
     <button class="primary" on:click={submitNote} disabled={noteBusy || needsName || !draft.trim()}>
       <PaperPlaneTilt size={15} weight="fill" />

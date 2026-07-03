@@ -75,6 +75,32 @@
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => dispatch('search', { q: localQuery.trim() }), 300);
   }
+
+  let searchEl: HTMLInputElement | null = null;
+
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      // Esc clears the query; a second Esc (already empty) leaves the field.
+      e.preventDefault();
+      if (localQuery) clearSearch();
+      else searchEl?.blur();
+    } else if (e.key === 'Enter') {
+      // Search immediately instead of waiting out the debounce.
+      clearTimeout(debounceTimer);
+      dispatch('search', { q: localQuery.trim() });
+    }
+  }
+
+  /** The "/" convention: focus search from anywhere in the grid. */
+  function onGlobalKey(e: KeyboardEvent) {
+    if (e.key !== '/') return;
+    const el = e.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+    // Inert while an overlay owns the screen (the lightbox locks body scroll).
+    if (document.body.style.overflow === 'hidden') return;
+    e.preventDefault();
+    searchEl?.focus();
+  }
   function clearSearch() {
     localQuery = '';
     clearTimeout(debounceTimer);
@@ -92,6 +118,8 @@
     if (sizeRaf !== undefined) cancelAnimationFrame(sizeRaf);
   });
 </script>
+
+<svelte:window on:keydown={onGlobalKey} />
 
 <header class="toolbar">
   <div class="title-block">
@@ -130,9 +158,11 @@
     <MagnifyingGlass size={15} class="s-icon" />
     <input
       type="search"
-      placeholder="Search…"
+      placeholder="Search… ( / )"
       bind:value={localQuery}
+      bind:this={searchEl}
       on:input={onInput}
+      on:keydown={onSearchKey}
       aria-label="Search photos"
     />
     {#if localQuery}

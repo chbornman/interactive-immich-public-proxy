@@ -20,6 +20,8 @@ html,
 body {
   margin: 0;
   padding: 0;
+  /* Keep Android pull-to-refresh from hijacking PhotoSwipe's drag-to-close. */
+  overscroll-behavior-y: none;
   background: var(--bg);
   color: var(--text);
   font-family:

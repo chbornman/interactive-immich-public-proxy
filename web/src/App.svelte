@@ -57,6 +57,8 @@
   }
 
   $: hasMore = nextCursor !== null;
+  // Tab title reflects the album instead of the generic shell title.
+  $: if (album?.title) document.title = album.title;
   $: emptyMessage =
     query || filter !== 'all' ? 'No photos match your filter.' : 'This album is empty.';
 
@@ -159,6 +161,7 @@
   }
 
   async function onUnlock(e: CustomEvent<{ password: string }>) {
+    if (unlockBusy) return;
     unlockBusy = true;
     unlockError = '';
     try {

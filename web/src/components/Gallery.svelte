@@ -45,9 +45,11 @@
       // containerEl is nulled by Svelte if we unmount before the frame fires.
       if (!containerEl) return;
       const tiles = containerEl.querySelectorAll('.tile');
-      const target = tiles[targetIndex];
+      const target = tiles[targetIndex] as HTMLElement | undefined;
       // No-op if the target tile isn't present (e.g. filtered out).
       target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Keyboard users land on the tile they were viewing, not the entry tile.
+      target?.focus({ preventScroll: true });
     });
   }
 

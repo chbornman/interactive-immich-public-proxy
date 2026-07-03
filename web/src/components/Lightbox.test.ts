@@ -170,9 +170,10 @@ describe('Lightbox', () => {
 
     expect(fire(document.createElement('input'))).toBe(true);
     expect(fire(document.createElement('textarea'))).toBe(true);
-    expect(fire(document.createElement('video'))).toBe(true);
-    // A focused video owns playback keys but never Escape: Esc must still
-    // close the lightbox even right after clicking the native controls.
+    // Arrows must ALWAYS navigate: even with the video focused (clicking its
+    // native controls focuses it), PhotoSwipe stays in charge and its own
+    // preventDefault suppresses the native 5s seek.
+    expect(fire(document.createElement('video'))).toBe(false);
     expect(fire(document.createElement('video'), 'Escape')).toBe(false);
     expect(fire(document.body)).toBe(false);
     expect(fire(null)).toBe(false);

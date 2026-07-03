@@ -10,7 +10,8 @@
   let password = '';
 
   function submit() {
-    if (!password) return;
+    // The busy guard stops Enter from re-dispatching during an in-flight unlock.
+    if (!password || busy) return;
     dispatch('submit', { password });
   }
 </script>

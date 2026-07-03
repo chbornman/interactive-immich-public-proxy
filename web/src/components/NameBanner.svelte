@@ -23,7 +23,8 @@
 
   async function save() {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    // The saving guard stops Enter from double-submitting mid-flight.
+    if (!trimmed || saving) return;
     saving = true;
     error = '';
     try {
@@ -69,6 +70,8 @@
         on:keydown={onKey}
         maxlength="60"
         aria-label="Display name"
+        autocomplete="name"
+        enterkeyhint="done"
         use:focusOnMount
       />
       {#if error}<span class="error">{error}</span>{/if}
