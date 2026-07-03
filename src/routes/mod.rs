@@ -1,5 +1,6 @@
 pub mod access;
 pub mod admin;
+pub mod albums;
 pub mod assets;
 pub mod download;
 pub mod marks;
@@ -24,6 +25,7 @@ pub fn router(st: AppState) -> Router {
     let api = Router::new()
         .route("/visitor/me", get(visitor::me))
         .route("/visitor/name", post(visitor::set_name))
+        .route("/albums", get(albums::index))
         .route("/s/{key}/unlock", post(access::unlock))
         .route("/s/{key}/album", get(assets::album))
         .route("/s/{key}/assets", get(assets::list))
@@ -55,7 +57,8 @@ pub fn router(st: AppState) -> Router {
 
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
-        .route("/", get(web::root))
+        // "/" serves the SPA too: with no share key it renders the public album index.
+        .route("/", get(web::spa))
         // Immich mints links as /share/<key>; /s/<key> is a short alias. Both serve the SPA.
         .route("/share/{key}", get(web::spa))
         .route("/s/{key}", get(web::spa))

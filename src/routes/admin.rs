@@ -15,6 +15,7 @@ pub struct TenantSummary {
     allow_notes: bool,
     allow_download: bool,
     public_write: bool,
+    listed: bool,
     synced_at: Option<i64>,
     assets: i64,
     marks: i64,
@@ -24,7 +25,7 @@ pub struct TenantSummary {
 /// GET /admin/tenants
 pub async fn tenants(State(st): State<AppState>) -> AppResult<Json<Vec<TenantSummary>>> {
     let rows: Vec<TenantSummary> = sqlx::query_as(
-        "SELECT t.id, t.title, t.allow_marks, t.allow_notes, t.allow_download, t.public_write, t.synced_at, \
+        "SELECT t.id, t.title, t.allow_marks, t.allow_notes, t.allow_download, t.public_write, t.listed, t.synced_at, \
          (SELECT COUNT(*) FROM asset a WHERE a.tenant_id = t.id) AS assets, \
          (SELECT COUNT(*) FROM mark m WHERE m.tenant_id = t.id) AS marks, \
          (SELECT COUNT(*) FROM note n WHERE n.tenant_id = t.id AND n.hidden = 0) AS notes \
@@ -43,6 +44,7 @@ pub struct TenantPatch {
     allow_notes: Option<bool>,
     allow_download: Option<bool>,
     public_write: Option<bool>,
+    listed: Option<bool>,
 }
 
 /// PATCH /admin/tenant/:id
@@ -66,6 +68,7 @@ pub async fn patch_tenant(
     set_bool!("allow_notes", p.allow_notes);
     set_bool!("allow_download", p.allow_download);
     set_bool!("public_write", p.public_write);
+    set_bool!("listed", p.listed);
     if let Some(title) = p.title {
         sqlx::query("UPDATE tenant SET title = ? WHERE id = ?")
             .bind(title)

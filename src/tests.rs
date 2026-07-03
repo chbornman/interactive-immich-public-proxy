@@ -247,3 +247,72 @@ async fn visitor_display_name_and_ban_flow() {
         .unwrap();
     assert!(crate::visitor::is_banned(&db, "v-1").await);
 }
+
+// ---------------------------------------------------------------------------
+// albums: public index listing
+// ---------------------------------------------------------------------------
+
+async fn insert_tenant(db: &sqlx::SqlitePool, id: &str, key: &str, needs_password: i64) {
+    // `listed` is deliberately omitted so its schema default applies.
+    sqlx::query(
+        "INSERT INTO tenant (id, share_key, immich_album, title, needs_password, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(key)
+    .bind(format!("album-{id}"))
+    .bind(format!("Title {id}"))
+    .bind(needs_password)
+    .bind(crate::state::now())
+    .execute(db)
+    .await
+    .unwrap();
+}
+
+async fn insert_asset(db: &sqlx::SqlitePool, tenant: &str, id: &str, kind: &str, taken_at: i64) {
+    sqlx::query("INSERT INTO asset (tenant_id, asset_id, kind, taken_at) VALUES (?, ?, ?, ?)")
+        .bind(tenant)
+        .bind(id)
+        .bind(kind)
+        .bind(taken_at)
+        .execute(db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn album_index_lists_only_public_listed_tenants() {
+    let db = test_db().await;
+
+    // One public tenant, one password-protected. The latter must never appear.
+    insert_tenant(&db, "t-pub", "key-pub", 0).await;
+    insert_tenant(&db, "t-pw", "key-pw", 1).await;
+    insert_asset(&db, "t-pub", "a-old", "IMAGE", 100).await;
+    insert_asset(&db, "t-pub", "a-new", "IMAGE", 200).await;
+    insert_asset(&db, "t-pub", "a-vid", "VIDEO", 150).await;
+    insert_asset(&db, "t-pw", "b-1", "IMAGE", 100).await;
+    insert_asset(&db, "t-pw", "b-2", "VIDEO", 200).await;
+
+    // The newly inserted rows (which omitted the column) default to listed=1.
+    let listed: (i64,) = sqlx::query_as("SELECT listed FROM tenant WHERE id = 't-pub'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(listed.0, 1);
+
+    let rows = crate::routes::albums::listed_albums(&db).await.unwrap();
+    assert_eq!(rows.len(), 1, "password-protected tenant must be excluded");
+    let a = &rows[0];
+    assert_eq!(a.key, "key-pub");
+    assert_eq!(a.title.as_deref(), Some("Title t-pub"));
+    assert_eq!(a.photos, 2);
+    assert_eq!(a.videos, 1);
+    assert_eq!(a.cover.as_deref(), Some("a-new"), "cover is the most recent asset");
+
+    // Unlisting hides the tenant from the index.
+    sqlx::query("UPDATE tenant SET listed = 0 WHERE id = 't-pub'")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert!(crate::routes::albums::listed_albums(&db).await.unwrap().is_empty());
+}

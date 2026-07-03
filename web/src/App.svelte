@@ -17,6 +17,7 @@
   import NameBanner from './components/NameBanner.svelte';
   import Slideshow from './components/Slideshow.svelte';
   import PasswordGate from './components/PasswordGate.svelte';
+  import AlbumIndex from './components/AlbumIndex.svelte';
 
   const PAGE = 100;
   const shareKey = getShareKey();
@@ -252,10 +253,8 @@
   }
 
   onMount(async () => {
-    if (!shareKey) {
-      fatalError = 'No share key found in the URL.';
-      return;
-    }
+    // No share key => the album index renders instead; skip the gallery load.
+    if (!shareKey) return;
     // Load album + assets + visitor in parallel.
     const albumP = getAlbum().catch(() => null);
     const visitorP = getVisitor().catch(() => null);
@@ -267,7 +266,9 @@
 </script>
 
 <main>
-  {#if passwordRequired}
+  {#if !shareKey}
+    <AlbumIndex />
+  {:else if passwordRequired}
     <PasswordGate error={unlockError} busy={unlockBusy} on:submit={onUnlock} />
   {:else}
   <Toolbar

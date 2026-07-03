@@ -81,6 +81,20 @@ function s(path: string): string {
   return `/api/s/${encodeURIComponent(shareKey)}${path}`;
 }
 
+/** One listed album on the public index page. `key` IS the public share link. */
+export interface AlbumSummary {
+  key: string;
+  title: string | null;
+  photos: number;
+  videos: number;
+  cover: string | null;
+}
+
+/** Public album index — the only helper that is not share-key-scoped. */
+export function listAlbums(): Promise<AlbumSummary[]> {
+  return jsonFetch<AlbumSummary[]>('/api/albums');
+}
+
 export function getAlbum(): Promise<AlbumInfo> {
   return jsonFetch<AlbumInfo>(s('/album'));
 }
