@@ -53,7 +53,13 @@ impl Config {
             db_path: var("DB_PATH", "/data/ipp.db"),
             web_dir: var("WEB_DIR", "web/dist"),
             bind: var("BIND", "0.0.0.0:3000"),
-            sync_ttl_secs: var("SYNC_TTL_SECS", "3600").parse().unwrap_or(3600),
+            // Clamp to strictly positive: a 0/negative TTL would mark every
+            // tenant perpetually stale and trigger endless resyncs.
+            sync_ttl_secs: var("SYNC_TTL_SECS", "3600")
+                .parse()
+                .ok()
+                .filter(|v| *v > 0)
+                .unwrap_or(3600),
             max_note_len: var("MAX_NOTE_LEN", "2000").parse().unwrap_or(2000),
             max_download_count: var("MAX_DOWNLOAD_COUNT", "300").parse().unwrap_or(300),
             max_download_bytes: var("MAX_DOWNLOAD_BYTES", "2147483648")

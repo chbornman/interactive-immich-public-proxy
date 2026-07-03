@@ -43,11 +43,23 @@ async fn main() -> anyhow::Result<()> {
     let limiter = Arc::new(RateLimiter::new(60.0, 15.0));
     let bind = cfg.bind.clone();
 
+    // Read the SPA shell once at startup; the handler serves it from memory.
+    let index_path = format!("{}/index.html", cfg.web_dir);
+    let index_html = match std::fs::read_to_string(&index_path) {
+        Ok(html) => html,
+        Err(e) => {
+            tracing::error!("failed to read {index_path} at startup: {e}");
+            String::new()
+        }
+    };
+
     let state = AppState {
         cfg: Arc::new(cfg),
         db,
         immich,
         limiter,
+        index_html,
+        syncing: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     };
 
     let app = routes::router(state);

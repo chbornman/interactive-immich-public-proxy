@@ -92,6 +92,10 @@ impl ImmichClient {
     pub fn new(base: &str) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
+            // Idle/read timeout so a stalled upstream stream errors instead of
+            // hanging forever. Not a total-duration cap: healthy large downloads
+            // keep making progress and are unaffected.
+            .read_timeout(std::time::Duration::from_secs(30))
             .pool_max_idle_per_host(16)
             .build()
             .expect("failed to build reqwest client");

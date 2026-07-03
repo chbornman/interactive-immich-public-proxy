@@ -95,12 +95,16 @@ pub async fn middleware(State(st): State<AppState>, mut req: Request, next: Next
         }
     }
 
-    // Upsert visitor row (cheap; INSERT OR IGNORE).
-    let _ = sqlx::query("INSERT OR IGNORE INTO visitor (id, first_seen) VALUES (?, ?)")
-        .bind(&id)
-        .bind(now())
-        .execute(&st.db)
-        .await;
+    // Insert the visitor row only when the id is freshly minted. Returning
+    // visitors already have a row (rows are never deleted; ban/set-name are
+    // UPDATEs), so we skip the write on every media byte fetch.
+    if fresh {
+        let _ = sqlx::query("INSERT OR IGNORE INTO visitor (id, first_seen) VALUES (?, ?)")
+            .bind(&id)
+            .bind(now())
+            .execute(&st.db)
+            .await;
+    }
 
     req.extensions_mut().insert(Visitor {
         id: id.clone(),

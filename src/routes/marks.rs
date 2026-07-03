@@ -61,6 +61,8 @@ pub async fn bulk(
 
     let do_mark = input.marked.unwrap_or(true);
     let mut items = Vec::with_capacity(input.ids.len());
+    // Wrap the per-id writes + counts in one transaction (one fsync, not N).
+    let mut tx = st.db.begin().await?;
     for id in &input.ids {
         if !tenant::asset_belongs(&st.db, &t.id, id).await? {
             continue;
@@ -74,28 +76,30 @@ pub async fn bulk(
             .bind(id)
             .bind(&v.id)
             .bind(now())
-            .execute(&st.db)
+            .execute(&mut *tx)
             .await?;
         } else {
             // Canonical unmark: clear all marks on this asset.
             sqlx::query("DELETE FROM mark WHERE tenant_id = ? AND asset_id = ?")
                 .bind(&t.id)
                 .bind(id)
-                .execute(&st.db)
+                .execute(&mut *tx)
                 .await?;
         }
 
+        // Shared cross-visitor count (not 0/1), so it must be queried, not derived.
         let count: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM mark WHERE tenant_id = ? AND asset_id = ?")
                 .bind(&t.id)
                 .bind(id)
-                .fetch_one(&st.db)
+                .fetch_one(&mut *tx)
                 .await?;
         items.push(BulkItem {
             id: id.clone(),
             mark_count: count.0,
         });
     }
+    tx.commit().await?;
 
     Ok(Json(BulkMarkResult { items }))
 }

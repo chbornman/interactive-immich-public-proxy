@@ -31,7 +31,7 @@ fn safe_name(name: &str) -> String {
 }
 
 /// POST /api/s/:key/download  { ids: [...] }
-/// One id → original passthrough; many → a streamed ZIP of originals.
+/// One id → original passthrough; many → an in-memory (buffered) ZIP of originals.
 pub async fn post(
     State(st): State<AppState>,
     Extension(v): Extension<Visitor>,
@@ -85,8 +85,8 @@ pub async fn post(
             .map_err(|e| AppError::Other(anyhow::anyhow!(e)));
     }
 
-    // Multiple: fetch originals into memory (bounded), then build a ZIP.
-    let mut files: Vec<(String, Vec<u8>)> = Vec::with_capacity(input.ids.len());
+    // Multiple: fetch originals into memory (bounded), then build an in-memory ZIP.
+    let mut files = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut total: u64 = 0;
 
@@ -106,7 +106,7 @@ pub async fn post(
             name = format!("{i}_{name}");
             seen.insert(name.clone());
         }
-        files.push((name, bytes.to_vec()));
+        files.push((name, bytes));
     }
 
     let zip_bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, zip::result::ZipError> {

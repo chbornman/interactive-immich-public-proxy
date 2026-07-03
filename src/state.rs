@@ -13,6 +13,10 @@ pub struct AppState {
     pub db: SqlitePool,
     pub immich: ImmichClient,
     pub limiter: Arc<RateLimiter>,
+    /// index.html, read once at startup and served from memory.
+    pub index_html: String,
+    /// Tenant ids with a background resync in flight (thundering-herd guard).
+    pub syncing: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 /// Resolved visitor identity, injected into request extensions by middleware.

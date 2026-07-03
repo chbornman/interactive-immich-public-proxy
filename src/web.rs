@@ -6,15 +6,12 @@ use crate::state::AppState;
 
 /// Serve the SPA shell for /s/:key. The built frontend uses absolute /assets/
 /// references (vite base '/'), so the same HTML works under any share path.
+/// index.html is read once at startup (see main.rs) and served from memory.
 pub async fn spa(State(st): State<AppState>) -> Response {
-    let path = format!("{}/index.html", st.cfg.web_dir);
-    match tokio::fs::read_to_string(&path).await {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => {
-            tracing::error!("failed to read {path}: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "frontend not built").into_response()
-        }
+    if st.index_html.is_empty() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "frontend not built").into_response();
     }
+    Html(st.index_html.clone()).into_response()
 }
 
 /// Minimal landing page at /.

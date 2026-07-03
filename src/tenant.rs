@@ -107,18 +107,29 @@ pub async fn ensure(st: &AppState, key: &str) -> AppResult<Tenant> {
                 .unwrap_or(true);
             if stale {
                 if let Some(album) = t.immich_album.clone() {
-                    let db = st.db.clone();
-                    let immich = st.immich.clone();
-                    let key = key.to_string();
-                    let id2 = id.clone();
-                    let token = (!t.share_token.is_empty()).then(|| t.share_token.clone());
-                    tokio::spawn(async move {
-                        if let Err(e) =
-                            sync_assets(&db, &immich, &id2, &album, &key, token.as_deref()).await
-                        {
-                            tracing::warn!("background resync failed for {id2}: {e}");
-                        }
-                    });
+                    // Thundering-herd guard: only one background resync per tenant.
+                    let claimed = {
+                        let mut g = st.syncing.lock().unwrap();
+                        g.insert(id.clone())
+                    };
+                    if claimed {
+                        let db = st.db.clone();
+                        let immich = st.immich.clone();
+                        let key = key.to_string();
+                        let id2 = id.clone();
+                        let token = (!t.share_token.is_empty()).then(|| t.share_token.clone());
+                        let syncing = st.syncing.clone();
+                        tokio::spawn(async move {
+                            let res =
+                                sync_assets(&db, &immich, &id2, &album, &key, token.as_deref())
+                                    .await;
+                            // Release the claim on both success and failure.
+                            syncing.lock().unwrap().remove(&id2);
+                            if let Err(e) = res {
+                                tracing::warn!("background resync failed for {id2}: {e}");
+                            }
+                        });
+                    }
                 }
             }
         }

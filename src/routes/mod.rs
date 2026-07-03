@@ -10,6 +10,7 @@ pub mod visitor;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{get, patch, post};
 use axum::Router;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
@@ -43,6 +44,15 @@ pub fn router(st: AppState) -> Router {
         .route("/note/{id}/hide", post(admin::hide_note))
         .route("/visitor/{id}/ban", post(admin::ban_visitor));
 
+    // Compress text responses (JSON/HTML/JS/CSS) but skip media: gzipping video
+    // or zip payloads breaks HTTP range/seek and just wastes CPU.
+    let compression = CompressionLayer::new().compress_when(
+        DefaultPredicate::new()
+            .and(NotForContentType::const_new("video/"))
+            .and(NotForContentType::const_new("application/zip"))
+            .and(NotForContentType::const_new("application/octet-stream")),
+    );
+
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/", get(web::root))
@@ -52,7 +62,7 @@ pub fn router(st: AppState) -> Router {
         .nest("/api", api)
         .nest("/admin", admin)
         .fallback_service(ServeDir::new(&st.cfg.web_dir))
-        .layer(CompressionLayer::new())
+        .layer(compression)
         .layer(TraceLayer::new_for_http())
         .with_state(st)
 }
