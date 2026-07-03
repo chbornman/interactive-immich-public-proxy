@@ -172,15 +172,19 @@
     // pswp's keydown is document-level and focus-agnostic: stand down while a
     // field or a video's native controls own the keys (Esc/arrows/z).
     pswp.on('keydown', (e) => {
+      const key = e.originalEvent.key;
       // In fullscreen, Esc should only exit fullscreen (the browser handles
       // that natively), not also close the lightbox.
-      if (e.originalEvent.key === 'Escape' && document.fullscreenElement) {
+      if (key === 'Escape' && document.fullscreenElement) {
         e.preventDefault();
         return;
       }
       const t = e.originalEvent.target as HTMLElement | null;
       if (!t) return;
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'VIDEO' || t.isContentEditable) {
+      const typing = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable;
+      // A focused video owns playback keys (Space, seek arrows) but NOT Esc —
+      // clicking the native controls focuses it, and Esc must still close.
+      if (typing || (t.tagName === 'VIDEO' && key !== 'Escape')) {
         e.preventDefault();
       }
     });

@@ -156,9 +156,9 @@ describe('Lightbox', () => {
   it('keydown guard stands down PhotoSwipe for field/video targets but not the body', async () => {
     const { pswp } = await renderOpen(0);
 
-    const fire = (target: EventTarget | null) => {
+    const fire = (target: EventTarget | null, key = 'ArrowRight') => {
       const e = {
-        originalEvent: { target },
+        originalEvent: { target, key },
         defaultPrevented: false,
         preventDefault() {
           this.defaultPrevented = true;
@@ -171,6 +171,9 @@ describe('Lightbox', () => {
     expect(fire(document.createElement('input'))).toBe(true);
     expect(fire(document.createElement('textarea'))).toBe(true);
     expect(fire(document.createElement('video'))).toBe(true);
+    // A focused video owns playback keys but never Escape: Esc must still
+    // close the lightbox even right after clicking the native controls.
+    expect(fire(document.createElement('video'), 'Escape')).toBe(false);
     expect(fire(document.body)).toBe(false);
     expect(fire(null)).toBe(false);
   });
