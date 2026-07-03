@@ -225,15 +225,15 @@
     {/if}
 
     <div class="bar" class:faded={!barVisible}>
-      <button class="bbtn" on:click={prev} title="Previous" aria-label="Previous"><CaretLeft size={18} weight="bold" /></button>
-      <button class="bbtn" on:click={togglePlay} title={running ? 'Pause' : 'Play'} aria-label={running ? 'Pause' : 'Play'}>
+      <button class="bbtn" on:click={prev} title="Previous (←)" aria-label="Previous"><CaretLeft size={18} weight="bold" /></button>
+      <button class="bbtn" on:click={togglePlay} title={running ? 'Pause (Space)' : 'Play (Space)'} aria-label={running ? 'Pause' : 'Play'}>
         {#if running}<Pause size={18} weight="fill" />{:else}<Play size={18} weight="fill" />{/if}
       </button>
-      <button class="bbtn" on:click={next} title="Next" aria-label="Next"><CaretRight size={18} weight="bold" /></button>
+      <button class="bbtn" on:click={next} title="Next (→)" aria-label="Next"><CaretRight size={18} weight="bold" /></button>
       <span class="counter">
         {index + 1} / {items.length}{#if loading} <span class="loading">·</span>{/if}
       </span>
-      <button class="bbtn end" on:click={close} title="Exit slideshow" aria-label="Exit slideshow"><X size={18} /></button>
+      <button class="bbtn end" on:click={close} title="Exit slideshow (Esc)" aria-label="Exit slideshow"><X size={18} /></button>
     </div>
   </div>
 {/if}

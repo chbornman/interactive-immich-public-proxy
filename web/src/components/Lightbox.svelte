@@ -2,7 +2,7 @@
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import PhotoSwipe from 'photoswipe';
   import 'photoswipe/style.css';
-  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp, ProjectorScreen } from 'phosphor-svelte';
+  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp, ProjectorScreen, Question } from 'phosphor-svelte';
   import type { Asset, AssetMeta } from '../types';
   import { assetUrl, getAssetMeta, toggleMark, addNote, downloadAssets, supportsShareFiles } from '../api';
   import NotesPanel from './NotesPanel.svelte';
@@ -24,8 +24,6 @@
   const MOBILE_MQ = '(max-width: 819px)';
 
   let pswp: PhotoSwipe | null = null;
-  /** Root grid element, fullscreened by the F key. */
-  let lbEl: HTMLDivElement | null = null;
   /** Stage grid cell that PhotoSwipe mounts into (via appendToEl). */
   let stageEl: HTMLDivElement | null = null;
   let ro: ResizeObserver | null = null;
@@ -42,6 +40,8 @@
   let isMobile = false;
   let sheetOpen = false;
   let showInfo = false;
+  /** Keyboard-shortcuts popover (desktop only; toggled by the ? key too). */
+  let showHelp = false;
 
   let meta: AssetMeta | null = null;
   let metaLoading = false;
@@ -279,6 +279,7 @@
       currentAsset = null;
       meta = null;
       sheetOpen = false;
+      showHelp = false;
       openIndex = null;
       lbOpen = false;
       ro?.disconnect();
@@ -303,7 +304,7 @@
   // we add Space (toggle the current video — native <video> needs focus
   // otherwise), F (fullscreen, gone from PhotoSwipe since v5), M (mark), and
   // Home/End (jump to first/last).
-  const OWN_KEYS = [' ', 'f', 'F', 'm', 'M', 'Home', 'End'];
+  const OWN_KEYS = [' ', 'f', 'F', 'm', 'M', 'Home', 'End', '?'];
   function onKey(e: KeyboardEvent) {
     if (!OWN_KEYS.includes(e.key)) return;
     const el = e.target as HTMLElement | null;
@@ -314,6 +315,11 @@
       (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'VIDEO' || el.isContentEditable)
     )
       return;
+    if (e.key === '?') {
+      e.preventDefault();
+      showHelp = !showHelp;
+      return;
+    }
     if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       toggleFullscreen();
@@ -338,12 +344,20 @@
     else video.pause();
   }
 
-  /** Fullscreen the whole lightbox (header + stage + notes); the stage's
-      ResizeObserver refits the media automatically. */
+  /** Fullscreen the MEDIA, not the chrome: the video player itself on video
+      slides (native controls take over), the stage cell on photos (pure view,
+      arrows/keys still work — the stage RO refits automatically). */
   async function toggleFullscreen() {
     try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await lbEl?.requestFullscreen?.();
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      const video = pswp?.currSlide?.content?.element?.querySelector(
+        'video.pswp-video',
+      ) as HTMLVideoElement | null;
+      if (video) await video.requestFullscreen?.();
+      else await stageEl?.requestFullscreen?.();
     } catch {
       /* fullscreen unavailable — ignore */
     }
@@ -424,7 +438,7 @@
 </script>
 
 {#if lbOpen}
-  <div class="lb" class:mobile={isMobile} bind:this={lbEl}>
+  <div class="lb" class:mobile={isMobile}>
     <header class="lb-header">
       <span class="fname" title={currentAsset?.filename}>{currentAsset?.filename ?? ''}</span>
       <span class="pos">{curIndex + 1} / {items.length}</span>
@@ -433,7 +447,7 @@
         class:on={meta?.marked}
         on:click={onToggleMark}
         disabled={markBusy || metaLoading}
-        title={meta?.marked ? 'Unmark' : 'Mark'}
+        title={meta?.marked ? 'Unmark (M)' : 'Mark (M)'}
         aria-label={meta?.marked ? 'Unmark' : 'Mark'}
       >
         <Star size={18} weight={meta?.marked ? 'fill' : 'regular'} />
@@ -453,7 +467,31 @@
       >
         {#if supportsShareFiles}<Export size={18} />{:else}<DownloadSimple size={18} />{/if}
       </button>
-      <button class="hbtn" on:click={() => pswp?.close()} title="Close" aria-label="Close">
+      {#if !isMobile}
+        <span class="help-wrap">
+          <button
+            class="hbtn"
+            class:on={showHelp}
+            on:click={() => (showHelp = !showHelp)}
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+            aria-expanded={showHelp}
+          >
+            <Question size={18} weight={showHelp ? 'fill' : 'regular'} />
+          </button>
+          {#if showHelp}
+            <div class="help-pop" role="note" aria-label="Keyboard shortcuts">
+              <div class="hp-row"><kbd>&larr;</kbd><kbd>&rarr;</kbd><span>navigate</span></div>
+              <div class="hp-row"><kbd>Space</kbd><span>play / pause video</span></div>
+              <div class="hp-row"><kbd>M</kbd><span>mark</span></div>
+              <div class="hp-row"><kbd>F</kbd><span>fullscreen</span></div>
+              <div class="hp-row"><kbd>Home</kbd><kbd>End</kbd><span>first / last</span></div>
+              <div class="hp-row"><kbd>Esc</kbd><span>close</span></div>
+            </div>
+          {/if}
+        </span>
+      {/if}
+      <button class="hbtn" on:click={() => pswp?.close()} title="Close (Esc)" aria-label="Close">
         <X size={18} />
       </button>
     </header>
@@ -551,6 +589,44 @@
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+  .help-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+  .help-pop {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 10; /* above the stage cell within the .lb stacking context */
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 10px 14px;
+    display: grid;
+    gap: 7px;
+    white-space: nowrap;
+  }
+  .hp-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+  .hp-row span {
+    margin-left: 4px;
+  }
+  .help-pop kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--text);
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    line-height: 1.5;
   }
   .hbtn {
     border: 1px solid var(--border);
