@@ -18,7 +18,7 @@ pub struct DownloadIn {
 }
 
 /// Strip path separators / quotes for safe Content-Disposition + zip entry names.
-fn safe_name(name: &str) -> String {
+pub(crate) fn safe_name(name: &str) -> String {
     let n: String = name
         .chars()
         .map(|c| if matches!(c, '/' | '\\' | '"' | '\n' | '\r') { '_' } else { c })

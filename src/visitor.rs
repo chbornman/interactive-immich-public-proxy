@@ -28,16 +28,16 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     out
 }
 
-fn sign(secret: &[u8], id: &str) -> String {
+pub(crate) fn sign(secret: &[u8], id: &str) -> String {
     hex::encode(hmac_sha256(secret, id.as_bytes()))
 }
 
 /// Cookie value is `<uuid>.<hmac>`; uuid never contains '.'.
-fn make_cookie_value(secret: &[u8], id: &str) -> String {
+pub(crate) fn make_cookie_value(secret: &[u8], id: &str) -> String {
     format!("{id}.{}", sign(secret, id))
 }
 
-fn verify(secret: &[u8], value: &str) -> Option<String> {
+pub(crate) fn verify(secret: &[u8], value: &str) -> Option<String> {
     let (id, sig) = value.split_once('.')?;
     if sign(secret, id) == sig {
         Some(id.to_string())

@@ -9,6 +9,9 @@ mod tenant;
 mod visitor;
 mod web;
 
+#[cfg(test)]
+mod tests;
+
 use std::sync::Arc;
 
 use crate::config::Config;
