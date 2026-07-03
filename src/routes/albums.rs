@@ -15,22 +15,22 @@ pub struct AlbumSummary {
     pub(crate) title: Option<String>,
     pub(crate) photos: i64,
     pub(crate) videos: i64,
-    /// Most recent asset, used as the card thumbnail (None for empty albums).
-    pub(crate) cover: Option<String>,
+    /// Password-protected shares are listed (title only) with a lock indicator;
+    /// their contents stay gated behind the Immich password.
+    pub(crate) needs_password: bool,
 }
 
-/// Albums eligible for the public index: listed, not password-protected, and
-/// actually provisioned (immich_album set). Password-protected albums must
-/// never appear here — not even their titles.
+/// Albums eligible for the public index: listed and actually provisioned
+/// (immich_album set). Password-protected albums appear too, flagged so the
+/// index can show a lock — hiding one entirely is the admin `listed` toggle.
 pub(crate) async fn listed_albums(db: &SqlitePool) -> Result<Vec<AlbumSummary>, sqlx::Error> {
     sqlx::query_as(
         "SELECT t.share_key AS key, t.title, \
          (SELECT COUNT(*) FROM asset a WHERE a.tenant_id = t.id AND a.kind != 'VIDEO') AS photos, \
          (SELECT COUNT(*) FROM asset a WHERE a.tenant_id = t.id AND a.kind = 'VIDEO') AS videos, \
-         (SELECT a.asset_id FROM asset a WHERE a.tenant_id = t.id \
-          ORDER BY a.taken_at DESC, a.asset_id DESC LIMIT 1) AS cover \
+         t.needs_password \
          FROM tenant t \
-         WHERE t.listed = 1 AND t.needs_password = 0 AND t.immich_album IS NOT NULL \
+         WHERE t.listed = 1 AND t.immich_album IS NOT NULL \
          ORDER BY t.created_at DESC",
     )
     .fetch_all(db)

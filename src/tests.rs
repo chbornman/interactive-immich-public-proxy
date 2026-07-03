@@ -281,10 +281,11 @@ async fn insert_asset(db: &sqlx::SqlitePool, tenant: &str, id: &str, kind: &str,
 }
 
 #[tokio::test]
-async fn album_index_lists_only_public_listed_tenants() {
+async fn album_index_lists_tenants_with_password_flag() {
     let db = test_db().await;
 
-    // One public tenant, one password-protected. The latter must never appear.
+    // One public tenant, one password-protected: BOTH are listed, the
+    // protected one flagged so the index can show a lock.
     insert_tenant(&db, "t-pub", "key-pub", 0).await;
     insert_tenant(&db, "t-pw", "key-pw", 1).await;
     insert_asset(&db, "t-pub", "a-old", "IMAGE", 100).await;
@@ -301,16 +302,17 @@ async fn album_index_lists_only_public_listed_tenants() {
     assert_eq!(listed.0, 1);
 
     let rows = crate::routes::albums::listed_albums(&db).await.unwrap();
-    assert_eq!(rows.len(), 1, "password-protected tenant must be excluded");
-    let a = &rows[0];
-    assert_eq!(a.key, "key-pub");
-    assert_eq!(a.title.as_deref(), Some("Title t-pub"));
-    assert_eq!(a.photos, 2);
-    assert_eq!(a.videos, 1);
-    assert_eq!(a.cover.as_deref(), Some("a-new"), "cover is the most recent asset");
+    assert_eq!(rows.len(), 2, "both tenants are listed");
+    let pubrow = rows.iter().find(|a| a.key == "key-pub").unwrap();
+    assert_eq!(pubrow.title.as_deref(), Some("Title t-pub"));
+    assert_eq!(pubrow.photos, 2);
+    assert_eq!(pubrow.videos, 1);
+    assert!(!pubrow.needs_password);
+    let pwrow = rows.iter().find(|a| a.key == "key-pw").unwrap();
+    assert!(pwrow.needs_password, "protected tenant carries the lock flag");
 
-    // Unlisting hides the tenant from the index.
-    sqlx::query("UPDATE tenant SET listed = 0 WHERE id = 't-pub'")
+    // Unlisting hides a tenant from the index entirely.
+    sqlx::query("UPDATE tenant SET listed = 0 WHERE id IN ('t-pub', 't-pw')")
         .execute(&db)
         .await
         .unwrap();

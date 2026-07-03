@@ -87,7 +87,8 @@ export interface AlbumSummary {
   title: string | null;
   photos: number;
   videos: number;
-  cover: string | null;
+  /** Password-protected shares are listed with a lock; contents stay gated. */
+  needsPassword: boolean;
 }
 
 /** Public album index — the only helper that is not share-key-scoped. */

@@ -17,8 +17,8 @@ const listAlbumsMock = vi.mocked(listAlbums);
 
 describe('AlbumIndex', () => {
   const albums: AlbumSummary[] = [
-    { key: 'key-a', title: 'Summer 2025', photos: 12, videos: 3, cover: 'asset-a' },
-    { key: 'key-b', title: null, photos: 0, videos: 0, cover: null },
+    { key: 'key-a', title: 'Summer 2025', photos: 12, videos: 3, needsPassword: false },
+    { key: 'key-b', title: null, photos: 0, videos: 0, needsPassword: true },
   ];
 
   beforeEach(() => {
@@ -31,7 +31,7 @@ describe('AlbumIndex', () => {
     await tick();
   };
 
-  it('renders a linked card per album with title and counts', async () => {
+  it('renders a linked card per album with title, counts, and lock badge', async () => {
     listAlbumsMock.mockResolvedValue(albums);
     const { container, getByText } = render(AlbumIndex);
     await settle();
@@ -46,7 +46,11 @@ describe('AlbumIndex', () => {
     // Counts line: zero parts are omitted entirely (album b shows none).
     expect(getByText('12 photos · 3 videos')).toBeInTheDocument();
     expect(container.querySelectorAll('.counts')).toHaveLength(1);
-    expect(document.title).toBe('Albums');
+    // Password-protected albums carry the lock badge; public ones don't.
+    expect(container.querySelectorAll('.lock')).toHaveLength(1);
+    expect(cards[1].querySelector('.lock')).toBeTruthy();
+    expect(cards[0].querySelector('.lock')).toBeNull();
+    expect(document.title).toBe('Interactive Immich Public Proxy');
   });
 
   it('shows the empty state when there are no listed albums', async () => {
