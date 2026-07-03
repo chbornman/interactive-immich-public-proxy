@@ -60,7 +60,7 @@
       const { w, h } = dims(a);
       if (a.kind === 'VIDEO') {
         return {
-          html: `<div class="pswp-video-wrap"><video class="pswp-video" controls playsinline preload="metadata" poster="${assetUrl(a.id, 'preview')}" src="${assetUrl(a.id, 'original')}"></video></div>`,
+          html: `<div class="pswp-video-wrap"><video class="pswp-video" controls controlslist="nofullscreen" playsinline preload="metadata" poster="${assetUrl(a.id, 'preview')}" src="${assetUrl(a.id, 'original')}"></video></div>`,
         };
       }
       return { src: assetUrl(a.id, 'preview'), width: w, height: h, alt: a.filename };
@@ -348,19 +348,13 @@
     else video.pause();
   }
 
-  /** Fullscreen the MEDIA, not the chrome: the video player itself on video
-      slides (native controls take over), the stage cell on photos (pure view,
-      arrows/keys still work — the stage RO refits automatically). */
+  /** Fullscreen the stage cell: media only, no chrome. Fullscreening the
+      <video> element itself would pin the screen to that ONE slide and break
+      prev/next (the old video's poster lingers); the stage keeps navigation,
+      keys, and autoplay working — the stage RO refits automatically. */
   async function toggleFullscreen() {
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        return;
-      }
-      const video = pswp?.currSlide?.content?.element?.querySelector(
-        'video.pswp-video',
-      ) as HTMLVideoElement | null;
-      if (video) await video.requestFullscreen?.();
+      if (document.fullscreenElement) await document.exitFullscreen();
       else await stageEl?.requestFullscreen?.();
     } catch {
       /* fullscreen unavailable — ignore */
