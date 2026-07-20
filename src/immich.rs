@@ -49,8 +49,22 @@ struct AlbumDto {
     id: String,
     #[serde(default)]
     album_name: String,
+}
+
+/// One entry of `GET /api/timeline/buckets` (Immich v3): a month + its count.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TimeBucketDto {
+    time_bucket: String,
+}
+
+/// `GET /api/timeline/bucket` returns columnar data (struct-of-arrays), not a
+/// list of asset objects. We only need the id column; full metadata comes from
+/// the per-asset endpoint.
+#[derive(Deserialize)]
+struct BucketAssetsDto {
     #[serde(default)]
-    assets: Vec<AssetDto>,
+    id: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +113,68 @@ fn parse_ts(s: &Option<String>) -> i64 {
         .and_then(|v| OffsetDateTime::parse(v, &Rfc3339).ok())
         .map(|dt| dt.unix_timestamp())
         .unwrap_or(0)
+}
+
+/// Immich answers 401 both for a revoked/unknown share key and for a
+/// password-protected link we hold no token for. Only the body tells them apart,
+/// and the distinction matters: a revoked key must surface as `NotFound` so the
+/// tenant is delisted as dead, while a locked one must surface as
+/// `PasswordRequired` so visitors get the password prompt instead.
+pub(crate) fn classify_unauthorized(body: &str) -> AppError {
+    if body.contains("Invalid share key") || body.contains("Invalid share slug") {
+        AppError::NotFound
+    } else {
+        AppError::PasswordRequired
+    }
+}
+
+/// Normalize an Immich asset DTO into the record we cache locally.
+fn map_asset(a: AssetDto) -> Asset {
+    let w = exif_i64(&a.exif_info, "exifImageWidth").unwrap_or(0);
+    let h = exif_i64(&a.exif_info, "exifImageHeight").unwrap_or(0);
+    let (mut width, mut height) = if w > 0 && h > 0 { (w, h) } else { (3, 2) };
+    if is_rotated_orientation(&a.exif_info) {
+        (width, height) = (height, width);
+    }
+
+    let mut taken = parse_ts(&a.file_created_at);
+    if taken == 0 {
+        taken = parse_ts(&a.local_date_time);
+    }
+
+    // Searchable text: meaningful exif VALUES (not raw JSON keys) +
+    // camera/lens so queries like "Canon", "iPhone", a lens, a city, or a
+    // caption word all match. The full exif blob is stored separately.
+    let tags = [
+        "description",
+        "city",
+        "state",
+        "country",
+        "make",
+        "model",
+        "lensModel",
+    ]
+    .iter()
+    .filter_map(|k| exif_str(&a.exif_info, k))
+    .collect::<Vec<_>>()
+    .join(" ");
+
+    let exif = a
+        .exif_info
+        .as_ref()
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+
+    Asset {
+        id: a.id,
+        kind: if a.kind.is_empty() { "IMAGE".into() } else { a.kind },
+        width,
+        height,
+        taken_at: taken,
+        filename: a.original_file_name,
+        tags,
+        exif,
+    }
 }
 
 impl ImmichClient {
@@ -151,10 +227,7 @@ impl ImmichClient {
         if status == reqwest::StatusCode::UNAUTHORIZED {
             // Distinguish a bad key from a password-protected link (IPP's heuristic).
             let body = resp.text().await.unwrap_or_default();
-            if body.contains("Invalid share key") || body.contains("Invalid share slug") {
-                return Err(AppError::NotFound);
-            }
-            return Err(AppError::PasswordRequired);
+            return Err(classify_unauthorized(&body));
         }
         if status == reqwest::StatusCode::NOT_FOUND {
             return Err(AppError::NotFound);
@@ -214,19 +287,15 @@ impl ImmichClient {
         Err(AppError::Upstream("login returned no token".into()))
     }
 
-    /// Fetch the full asset list for an album via the share key.
-    pub async fn album_assets(
+    /// Issue an authenticated read-only GET against Immich and decode JSON.
+    /// `what` names the call for error messages.
+    async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
-        album_id: &str,
+        url: String,
         key: &str,
         token: Option<&str>,
-    ) -> AppResult<Vec<Asset>> {
-        let url = format!(
-            "{}/api/albums/{}?key={}&withoutAssets=false",
-            self.base,
-            enc(album_id),
-            enc(key)
-        );
+        what: &str,
+    ) -> AppResult<T> {
         let mut req = self
             .http
             .get(url)
@@ -237,68 +306,89 @@ impl ImmichClient {
         }
         let resp = req.send().await.map_err(|e| AppError::Upstream(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            return Err(AppError::Upstream(format!("albums/{album_id} {}", resp.status())));
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(classify_unauthorized(&body));
         }
-
-        let album: AlbumDto = resp
-            .json()
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(AppError::NotFound);
+        }
+        if !status.is_success() {
+            return Err(AppError::Upstream(format!("{what} {status}")));
+        }
+        resp.json()
             .await
-            .map_err(|e| AppError::Upstream(format!("decode album: {e}")))?;
+            .map_err(|e| AppError::Upstream(format!("decode {what}: {e}")))
+    }
 
-        let assets = album
-            .assets
-            .into_iter()
-            .map(|a| {
-                let w = exif_i64(&a.exif_info, "exifImageWidth").unwrap_or(0);
-                let h = exif_i64(&a.exif_info, "exifImageHeight").unwrap_or(0);
-                let (mut width, mut height) = if w > 0 && h > 0 { (w, h) } else { (3, 2) };
-                if is_rotated_orientation(&a.exif_info) {
-                    (width, height) = (height, width);
-                }
+    /// Fetch the album's complete asset id list via the share key.
+    ///
+    /// Immich v3 removed the inline `assets` array from `GET /api/albums/{id}`
+    /// (it still returns 200 with `assetCount`, just no assets — a silent break),
+    /// so the listing now goes through the timeline API: one call for the month
+    /// buckets, then one per bucket. Both accept a share key. Metadata is NOT
+    /// available here — only ids — so callers pair this with `asset_detail`.
+    pub async fn album_asset_ids(
+        &self,
+        album_id: &str,
+        key: &str,
+        token: Option<&str>,
+    ) -> AppResult<Vec<String>> {
+        let buckets: Vec<TimeBucketDto> = self
+            .get_json(
+                format!(
+                    "{}/api/timeline/buckets?albumId={}&key={}",
+                    self.base,
+                    enc(album_id),
+                    enc(key)
+                ),
+                key,
+                token,
+                "timeline/buckets",
+            )
+            .await?;
 
-                let mut taken = parse_ts(&a.file_created_at);
-                if taken == 0 {
-                    taken = parse_ts(&a.local_date_time);
-                }
+        // Sequential: buckets are one-per-month and cheap, and a sync is rare.
+        let mut ids = Vec::new();
+        for b in &buckets {
+            let page: BucketAssetsDto = self
+                .get_json(
+                    format!(
+                        "{}/api/timeline/bucket?albumId={}&timeBucket={}&key={}",
+                        self.base,
+                        enc(album_id),
+                        enc(&b.time_bucket),
+                        enc(key)
+                    ),
+                    key,
+                    token,
+                    "timeline/bucket",
+                )
+                .await?;
+            ids.extend(page.id);
+        }
+        Ok(ids)
+    }
 
-                // Searchable text: meaningful exif VALUES (not raw JSON keys) +
-                // camera/lens so queries like "Canon", "iPhone", a lens, a city, or a
-                // caption word all match. The full exif blob is stored separately.
-                let tags = [
-                    "description",
-                    "city",
-                    "state",
-                    "country",
-                    "make",
-                    "model",
-                    "lensModel",
-                ]
-                .iter()
-                .filter_map(|k| exif_str(&a.exif_info, k))
-                .collect::<Vec<_>>()
-                .join(" ");
-
-                let exif = a
-                    .exif_info
-                    .as_ref()
-                    .map(|v| v.to_string())
-                    .unwrap_or_default();
-
-                Asset {
-                    id: a.id,
-                    kind: if a.kind.is_empty() { "IMAGE".into() } else { a.kind },
-                    width,
-                    height,
-                    taken_at: taken,
-                    filename: a.original_file_name,
-                    tags,
-                    exif,
-                }
-            })
-            .collect();
-
-        Ok(assets)
+    /// Fetch one asset's full metadata (filename, exif, tags, dimensions).
+    /// The timeline API only yields ids, so this fills in everything the local
+    /// cache stores. Callers should only invoke it for assets not already cached.
+    pub async fn asset_detail(
+        &self,
+        asset_id: &str,
+        key: &str,
+        token: Option<&str>,
+    ) -> AppResult<Asset> {
+        let dto: AssetDto = self
+            .get_json(
+                format!("{}/api/assets/{}?key={}", self.base, enc(asset_id), enc(key)),
+                key,
+                token,
+                "assets/{id}",
+            )
+            .await?;
+        Ok(map_asset(dto))
     }
 
     /// Stream an asset's bytes from Immich. `size` is thumbnail | preview | original.

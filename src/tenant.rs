@@ -220,7 +220,18 @@ pub async fn unlock(st: &AppState, key: &str, password: &str) -> AppResult<Strin
     Ok(id)
 }
 
-/// Re-fetch the album's asset list from Immich (read-only) and replace the cache.
+/// How many per-asset metadata fetches to keep in flight during a sync.
+/// Immich is on the internal network, but a first sync of a large album issues
+/// one request per asset — this bounds the burst.
+const DETAIL_CONCURRENCY: usize = 8;
+
+/// Re-sync the album's asset list from Immich (read-only), incrementally.
+///
+/// Immich v3's timeline API returns ids only, so full metadata costs one request
+/// per asset. To keep re-syncs cheap we diff against the cache: assets already
+/// stored are left untouched, assets no longer in the album are pruned, and only
+/// genuinely new ids are fetched. A re-sync of an unchanged album issues no
+/// per-asset requests at all.
 pub async fn sync_assets(
     db: &SqlitePool,
     immich: &crate::immich::ImmichClient,
@@ -229,18 +240,77 @@ pub async fn sync_assets(
     key: &str,
     token: Option<&str>,
 ) -> AppResult<()> {
-    let assets = immich.album_assets(album_id, key, token).await?;
-    tracing::info!("syncing {} assets for tenant {}", assets.len(), tenant_id);
+    let remote: Vec<String> = immich.album_asset_ids(album_id, key, token).await?;
+    let remote_set: std::collections::HashSet<&str> =
+        remote.iter().map(|s| s.as_str()).collect();
+
+    let cached: Vec<(String,)> = sqlx::query_as("SELECT asset_id FROM asset WHERE tenant_id = ?")
+        .bind(tenant_id)
+        .fetch_all(db)
+        .await?;
+    let cached_set: std::collections::HashSet<String> =
+        cached.into_iter().map(|r| r.0).collect();
+
+    let stale: Vec<&String> = cached_set
+        .iter()
+        .filter(|id| !remote_set.contains(id.as_str()))
+        .collect();
+    let new_ids: Vec<&String> = remote.iter().filter(|id| !cached_set.contains(*id)).collect();
+
+    tracing::info!(
+        "syncing tenant {}: {} in album, {} cached, {} new, {} pruned",
+        tenant_id,
+        remote.len(),
+        cached_set.len(),
+        new_ids.len(),
+        stale.len()
+    );
+
+    // An album that legitimately has no assets is possible, but a sudden drop to
+    // zero against a non-empty cache is the signature of an upstream API change
+    // (v3 did exactly this). Refuse to wipe a populated cache on that signal.
+    if remote.is_empty() && !cached_set.is_empty() {
+        return Err(AppError::Upstream(format!(
+            "album {album_id} returned 0 assets but {} are cached; refusing to wipe",
+            cached_set.len()
+        )));
+    }
+
+    // Fetch metadata for new ids only, bounded concurrency.
+    let mut fetched: Vec<crate::immich::Asset> = Vec::with_capacity(new_ids.len());
+    for chunk in new_ids.chunks(DETAIL_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for id in chunk {
+            let (immich, id, key) = (immich.clone(), (*id).clone(), key.to_string());
+            let token = token.map(|t| t.to_string());
+            set.spawn(async move {
+                immich.asset_detail(&id, &key, token.as_deref()).await
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok(Ok(a)) => fetched.push(a),
+                // One bad asset shouldn't abort the whole sync; it'll be retried
+                // on the next pass since it stays absent from the cache.
+                Ok(Err(e)) => tracing::warn!("asset detail failed during sync: {e}"),
+                Err(e) => tracing::warn!("asset detail task panicked: {e}"),
+            }
+        }
+    }
 
     let mut tx = db.begin().await?;
-    sqlx::query("DELETE FROM asset WHERE tenant_id = ?")
-        .bind(tenant_id)
-        .execute(&mut *tx)
-        .await?;
 
-    for a in &assets {
+    for id in &stale {
+        sqlx::query("DELETE FROM asset WHERE tenant_id = ? AND asset_id = ?")
+            .bind(tenant_id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    for a in &fetched {
         sqlx::query(
-            "INSERT INTO asset \
+            "INSERT OR REPLACE INTO asset \
              (tenant_id, asset_id, kind, width, height, taken_at, filename, immich_tags, exif_json) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )

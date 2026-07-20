@@ -200,6 +200,20 @@ fn exif_orientation_rotation_detection() {
     assert!(!crate::immich::is_rotated_orientation(&None));
 }
 
+/// A revoked share key and a locked (password-protected) one both come back as
+/// 401; only the body separates them. Getting this wrong makes deleted links
+/// prompt visitors for a password forever instead of being delisted as dead.
+#[test]
+fn unauthorized_body_distinguishes_revoked_from_locked() {
+    use crate::error::AppError;
+    let c = crate::immich::classify_unauthorized;
+    assert!(matches!(c(r#"{"message":"Invalid share key"}"#), AppError::NotFound));
+    assert!(matches!(c(r#"{"message":"Invalid share slug"}"#), AppError::NotFound));
+    // Anything else (incl. Immich's password challenge) means "alive but locked".
+    assert!(matches!(c(r#"{"message":"Password required"}"#), AppError::PasswordRequired));
+    assert!(matches!(c(""), AppError::PasswordRequired));
+}
+
 // ---------------------------------------------------------------------------
 // download: safe_name
 // ---------------------------------------------------------------------------
