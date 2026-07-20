@@ -147,6 +147,67 @@
     }
   }
 
+  /** Transient message for download-all outcomes (too large, failed). */
+  let downloadNotice = '';
+  let downloadNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  function notice(msg: string) {
+    downloadNotice = msg;
+    clearTimeout(downloadNoticeTimer);
+    downloadNoticeTimer = setTimeout(() => (downloadNotice = ''), 6000);
+  }
+
+  /**
+   * Download everything in the current view (respects filter/kind/search).
+   *
+   * Gathers ids page by page, stopping the moment the count exceeds the server's
+   * cap — so an oversized album costs one extra request, not a full walk of the
+   * album followed by a rejection.
+   */
+  async function onDownloadAll() {
+    if (downloading) return;
+    const cap = album?.maxDownload ?? 0;
+
+    downloading = true;
+    try {
+      const ids: string[] = [...assets.map((a) => a.id)];
+      let next: string | null = nextCursor;
+      let cur: string = cursor;
+      const seen = new Set(ids);
+
+      while (next !== null && (cap <= 0 || ids.length <= cap)) {
+        const page = await getAssets({ cursor: cur, limit: 200, filter, kind, q: query });
+        for (const a of page.items) {
+          if (!seen.has(a.id)) {
+            seen.add(a.id);
+            ids.push(a.id);
+          }
+        }
+        next = page.nextCursor;
+        cur = page.nextCursor ?? '';
+      }
+
+      if (ids.length === 0) {
+        notice('Nothing to download.');
+        return;
+      }
+      if (cap > 0 && ids.length > cap) {
+        notice(
+          `That's ${ids.length.toLocaleString()} photos — more than the ${cap.toLocaleString()} per-download limit. Use Select to pick a smaller batch.`,
+        );
+        return;
+      }
+      await downloadAssets(ids);
+    } catch (e) {
+      notice(
+        e instanceof ApiError && e.status === 413
+          ? 'That selection is too large to download at once.'
+          : 'Download failed. Please try again.',
+      );
+    } finally {
+      downloading = false;
+    }
+  }
+
   async function bulkSetMark(marked: boolean) {
     if (selectedIds.size === 0) return;
     marking = true;
@@ -283,6 +344,8 @@
     selectedCount={selectedIds.size}
     {downloading}
     {marking}
+    allowDownload={album?.allowDownload ?? false}
+    filtered={query !== '' || filter !== 'all' || kind !== 'all'}
     visitorName={visitor?.name ?? ''}
     {tileSize}
     on:filter={onFilter}
@@ -290,12 +353,17 @@
     on:search={onSearch}
     on:toggleSelect={onToggleSelectMode}
     on:download={onDownload}
+    on:downloadAll={onDownloadAll}
     on:markSelected={() => bulkSetMark(true)}
     on:unmarkSelected={() => bulkSetMark(false)}
     on:editName={() => (showNameBanner = true)}
     on:slideshow={() => startSlideshow(0)}
     on:size={onSize}
   />
+
+  {#if downloadNotice}
+    <div class="download-notice" role="status">{downloadNotice}</div>
+  {/if}
 
   <NameBanner
     visible={showNameBanner}
@@ -344,5 +412,15 @@
 <style>
   main {
     min-height: 100vh;
+  }
+  .download-notice {
+    margin: 8px 10px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    color: var(--text);
+    font-size: 13px;
   }
 </style>

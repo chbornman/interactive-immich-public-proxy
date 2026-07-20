@@ -178,4 +178,40 @@ describe('Lightbox', () => {
     expect(fire(document.body)).toBe(false);
     expect(fire(null)).toBe(false);
   });
+
+  it('shows the notes sidebar by default and hides it on toggle', async () => {
+    localStorage.removeItem('ipp-notes');
+    const { container } = await renderOpen(0);
+    expect(container.querySelector('.lb-side')).not.toBeNull();
+    expect(container.querySelector('.lb.no-side')).toBeNull();
+
+    await fireEvent.keyDown(window, { key: 'n' });
+    await tick();
+
+    // Panel gone AND the grid collapsed, so the stage reclaims the column.
+    expect(container.querySelector('.lb-side')).toBeNull();
+    expect(container.querySelector('.lb.no-side')).not.toBeNull();
+    // Hiding must not leak the mobile sheet into the desktop layout.
+    expect(container.querySelector('.lb-sheet')).toBeNull();
+  });
+
+  it('remembers the hidden notes panel across opens', async () => {
+    localStorage.setItem('ipp-notes', '0');
+    const { container } = await renderOpen(0);
+    expect(container.querySelector('.lb-side')).toBeNull();
+    localStorage.removeItem('ipp-notes');
+  });
+
+  it('reopening the panel restores it', async () => {
+    localStorage.setItem('ipp-notes', '0');
+    const { container } = await renderOpen(0);
+    expect(container.querySelector('.lb-side')).toBeNull();
+
+    await fireEvent.keyDown(window, { key: 'N' });
+    await tick();
+
+    expect(container.querySelector('.lb-side')).not.toBeNull();
+    expect(container.querySelector('.lb.no-side')).toBeNull();
+    localStorage.removeItem('ipp-notes');
+  });
 });

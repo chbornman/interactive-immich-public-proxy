@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onMount, onDestroy } from 'svelte';
   import type { Asset } from '../types';
-  import { layoutJustified, type LaidOutRow } from '../layout';
+  import { layoutJustified, groupByDay, type LaidOutRow } from '../layout';
   import Tile from './Tile.svelte';
 
   export let assets: Asset[] = [];
@@ -25,17 +25,19 @@
 
   let containerEl: HTMLDivElement;
   let containerWidth = 0;
-  let rows: LaidOutRow[] = [];
+  /** Day-separated sections; each lays out its own justified rows. */
+  let sections: { key: string; label: string; rows: LaidOutRow[] }[] = [];
 
   let sentinel: HTMLDivElement;
   let io: IntersectionObserver | null = null;
   let ro: ResizeObserver | null = null;
 
-  $: rows = layoutJustified(assets, {
-    containerWidth,
-    targetRowHeight,
-    gap: GAP,
-  });
+  // Each day lays out independently so a row never straddles a date boundary.
+  $: sections = groupByDay(assets).map((g) => ({
+    key: g.key,
+    label: g.label,
+    rows: layoutJustified(g.assets, { containerWidth, targetRowHeight, gap: GAP }),
+  }));
 
   /** Scroll to the tile at galleryScrollTarget after the gallery re-renders. */
   $: if (galleryScrollTarget !== null && assets.length > 0 && containerEl) {
@@ -101,19 +103,25 @@
       <p>{emptyMessage}</p>
     </div>
   {:else}
-    {#each rows as row, ri (ri)}
-      <div class="row" style="height:{row.height}px;gap:{GAP}px;">
-        {#each row.tiles as t (t.asset.id)}
-          <Tile
-            asset={t.asset}
-            width={t.width}
-            height={t.height}
-            {selectMode}
-            selected={selectedIds.has(t.asset.id)}
-            on:activate={(e) => onActivate(e.detail.asset)}
-          />
-        {/each}
+    {#each sections as section (section.key)}
+      <div class="day-sep">
+        <h2>{section.label}</h2>
+        <span class="rule"></span>
       </div>
+      {#each section.rows as row, ri (ri)}
+        <div class="row" style="height:{row.height}px;gap:{GAP}px;">
+          {#each row.tiles as t (t.asset.id)}
+            <Tile
+              asset={t.asset}
+              width={t.width}
+              height={t.height}
+              {selectMode}
+              selected={selectedIds.has(t.asset.id)}
+              on:activate={(e) => onActivate(e.detail.asset)}
+            />
+          {/each}
+        </div>
+      {/each}
     {/each}
 
     {#if loading}
@@ -139,6 +147,31 @@
   .row {
     display: flex;
     flex-direction: row;
+  }
+  .day-sep {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    /* Tighter above than below so the label reads as belonging to the photos
+       under it, not floating between the two days. */
+    margin: 18px 2px 2px;
+  }
+  /* No top margin on the first separator — the toolbar already provides it. */
+  .day-sep:first-child {
+    margin-top: 2px;
+  }
+  .day-sep h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .day-sep .rule {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
   }
   .loading-row {
     display: flex;

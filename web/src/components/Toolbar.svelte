@@ -33,12 +33,16 @@
   export let marking = false;
   export let visitorName = '';
   export let tileSize = 220;
+  export let allowDownload = false;
+  /** A filter/search is narrowing the view, so "all" means "all matching". */
+  export let filtered = false;
 
   const dispatch = createEventDispatcher<{
     filter: { filter: FilterName };
     search: { q: string };
     toggleSelect: void;
     download: void;
+    downloadAll: void;
     markSelected: void;
     unmarkSelected: void;
     editName: void;
@@ -203,6 +207,19 @@
         {#if supportsShareFiles}<Export size={16} />{:else}<DownloadSimple size={16} />{/if}
         <span class="label">
           {downloading ? 'Preparing…' : `${supportsShareFiles ? 'Share' : 'Download'} (${selectedCount})`}
+        </span>
+      </button>
+    {/if}
+    {#if allowDownload && !selectMode && total > 0}
+      <button
+        class="dl-all"
+        on:click={() => dispatch('downloadAll')}
+        disabled={downloading}
+        title={filtered ? 'Download all matching photos' : 'Download all photos'}
+      >
+        <DownloadSimple size={16} />
+        <span class="label">
+          {downloading ? 'Preparing…' : filtered ? 'Download matching' : 'Download all'}
         </span>
       </button>
     {/if}

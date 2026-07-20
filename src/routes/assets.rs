@@ -14,6 +14,12 @@ pub struct AlbumInfo {
     total: i64,
     photos: i64,
     videos: i64,
+    /// Whether downloads are permitted at all for this share.
+    allow_download: bool,
+    /// Server cap on assets per download request. Exposed so the client can
+    /// refuse an oversized "download all" up front instead of paginating the
+    /// whole album only to be rejected.
+    max_download: i64,
 }
 
 /// GET /api/s/:key/album
@@ -32,10 +38,12 @@ pub async fn album(
     .await?;
     let (total, videos) = row;
     Ok(Json(AlbumInfo {
-        title: t.title.unwrap_or_default(),
+        title: t.title.clone().unwrap_or_default(),
         total,
         photos: total - videos,
         videos,
+        allow_download: t.allow_download,
+        max_download: st.cfg.max_download_count as i64,
     }))
 }
 

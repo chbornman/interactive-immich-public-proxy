@@ -2,7 +2,7 @@
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import PhotoSwipe from 'photoswipe';
   import 'photoswipe/style.css';
-  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp, ProjectorScreen, Question } from 'phosphor-svelte';
+  import { Star, Info, DownloadSimple, Export, X, CaretDown, CaretUp, ProjectorScreen, Question, ChatCircle } from 'phosphor-svelte';
   import type { Asset, AssetMeta } from '../types';
   import { assetUrl, getAssetMeta, toggleMark, addNote, downloadAssets, supportsShareFiles } from '../api';
   import NotesPanel from './NotesPanel.svelte';
@@ -40,6 +40,9 @@
   let isMobile = false;
   let sheetOpen = false;
   let showInfo = false;
+  /** Desktop notes sidebar visibility; remembered across sessions.
+      Mobile has its own collapsible sheet and ignores this. */
+  let showNotes = localStorage.getItem('ipp-notes') !== '0';
   /** Keyboard-shortcuts popover (desktop only; toggled by the ? key too). */
   let showHelp = false;
 
@@ -306,7 +309,7 @@
   // we add Space (toggle the current video — native <video> needs focus
   // otherwise), F (fullscreen, gone from PhotoSwipe since v5), M (mark), and
   // Home/End (jump to first/last).
-  const OWN_KEYS = [' ', 'f', 'F', 'm', 'M', 'Home', 'End', '?'];
+  const OWN_KEYS = [' ', 'f', 'F', 'm', 'M', 'n', 'N', 'Home', 'End', '?'];
   function onKey(e: KeyboardEvent) {
     if (!OWN_KEYS.includes(e.key)) return;
     const el = e.target as HTMLElement | null;
@@ -329,6 +332,11 @@
     if (e.key === 'm' || e.key === 'M') {
       e.preventDefault();
       onToggleMark();
+      return;
+    }
+    if (e.key === 'n' || e.key === 'N') {
+      e.preventDefault();
+      toggleNotes();
       return;
     }
     if (e.key === 'Home' || e.key === 'End') {
@@ -421,6 +429,25 @@
   function toggleInfo() {
     showInfo = !showInfo;
     if (showInfo && isMobile) sheetOpen = true;
+    // Info renders inside the notes panel: opening it with the panel hidden
+    // would show nothing.
+    if (showInfo && !isMobile) setNotes(true);
+  }
+
+  function setNotes(next: boolean) {
+    showNotes = next;
+    localStorage.setItem('ipp-notes', next ? '1' : '0');
+  }
+
+  function toggleNotes() {
+    if (isMobile) {
+      sheetOpen = !sheetOpen;
+      return;
+    }
+    // Hiding the panel hides the info view with it, so the Info button's
+    // pressed state doesn't outlive what it controls.
+    if (showNotes && showInfo) showInfo = false;
+    setNotes(!showNotes);
   }
 
   onDestroy(() => {
@@ -433,7 +460,7 @@
 </script>
 
 {#if lbOpen}
-  <div class="lb" class:mobile={isMobile}>
+  <div class="lb" class:mobile={isMobile} class:no-side={!isMobile && !showNotes}>
     <header class="lb-header">
       <span class="fname" title={currentAsset?.filename}>{currentAsset?.filename ?? ''}</span>
       <span class="pos">{curIndex + 1} / {items.length}</span>
@@ -451,6 +478,19 @@
       <button class="hbtn" class:on={showInfo} on:click={toggleInfo} title="Image info" aria-label="Image info">
         <Info size={18} weight={showInfo ? 'fill' : 'regular'} />
       </button>
+      {#if !isMobile}
+        <button
+          class="hbtn"
+          class:on={showNotes}
+          on:click={toggleNotes}
+          title={showNotes ? 'Hide notes (N)' : 'Show notes (N)'}
+          aria-label={showNotes ? 'Hide notes' : 'Show notes'}
+          aria-pressed={showNotes}
+        >
+          <ChatCircle size={18} weight={showNotes ? 'fill' : 'regular'} />
+          {#if meta?.notes?.length}<span class="cnt">{meta.notes.length}</span>{/if}
+        </button>
+      {/if}
       <button class="hbtn" on:click={startSlideshow} title="Slideshow" aria-label="Slideshow">
         <ProjectorScreen size={18} />
       </button>
@@ -479,6 +519,7 @@
               <div class="hp-row"><kbd>&larr;</kbd><kbd>&rarr;</kbd><span>navigate</span></div>
               <div class="hp-row"><kbd>Space</kbd><span>play / pause video</span></div>
               <div class="hp-row"><kbd>M</kbd><span>mark</span></div>
+              <div class="hp-row"><kbd>N</kbd><span>show / hide notes</span></div>
               <div class="hp-row"><kbd>F</kbd><span>fullscreen</span></div>
               <div class="hp-row"><kbd>Home</kbd><kbd>End</kbd><span>first / last</span></div>
               <div class="hp-row"><kbd>Esc</kbd><span>close</span></div>
@@ -494,18 +535,20 @@
     <div class="lb-stage" bind:this={stageEl}></div>
 
     {#if !isMobile}
-      <aside class="lb-side">
-        <NotesPanel
-          {meta}
-          loading={metaLoading}
-          {noteBusy}
-          asset={currentAsset}
-          {showInfo}
-          {visitorName}
-          on:addNote={onAddNote}
-          on:setname={(e) => dispatch('setname', e.detail)}
-        />
-      </aside>
+      {#if showNotes}
+        <aside class="lb-side">
+          <NotesPanel
+            {meta}
+            loading={metaLoading}
+            {noteBusy}
+            asset={currentAsset}
+            {showInfo}
+            {visitorName}
+            on:addNote={onAddNote}
+            on:setname={(e) => dispatch('setname', e.detail)}
+          />
+        </aside>
+      {/if}
     {:else}
       <div class="lb-sheet" class:open={sheetOpen}>
         <button class="sheet-handle" on:click={() => (sheetOpen = !sheetOpen)}>
@@ -545,6 +588,16 @@
       'stage  side';
     grid-template-rows: auto minmax(0, 1fr);
     grid-template-columns: minmax(0, 1fr) var(--lb-side-w);
+  }
+
+  /* Notes hidden: the stage takes the full width. The sidebar isn't rendered,
+     so the column is collapsed rather than merely emptied. The stage's
+     ResizeObserver refits PhotoSwipe — no window resize fires here. */
+  .lb.no-side {
+    grid-template-areas:
+      'header'
+      'stage';
+    grid-template-columns: minmax(0, 1fr);
   }
 
   /* Mobile: three stacked rows. The breakpoint lives ONLY in the JS matchMedia

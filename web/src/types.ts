@@ -21,6 +21,9 @@ export interface AlbumInfo {
   total: number;
   photos: number;
   videos: number;
+  allowDownload: boolean;
+  /** Server cap on assets per download request. */
+  maxDownload: number;
 }
 
 export interface AssetsPage {

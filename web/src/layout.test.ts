@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { layoutJustified } from './layout';
+import { layoutJustified, groupByDay, dayLabel } from './layout';
 import type { Asset } from './types';
 
 describe('layoutJustified', () => {
@@ -81,5 +81,65 @@ describe('layoutJustified', () => {
     expect(rows).toHaveLength(1);
     const tile = rows[0].tiles[0];
     expect(tile.width).toBeCloseTo(tile.height, 6);
+  });
+});
+
+describe('groupByDay', () => {
+  let seq = 0;
+  /** Build an asset taken at a specific LOCAL wall-clock time. */
+  const at = (y: number, m: number, d: number, hh = 12): Asset => ({
+    id: `g${++seq}`,
+    kind: 'IMAGE',
+    width: 1600,
+    height: 900,
+    takenAt: Math.floor(new Date(y, m - 1, d, hh, 0, 0).getTime() / 1000),
+    filename: `g${seq}.jpg`,
+    markCount: 0,
+    hasNote: false,
+  });
+
+  it('returns nothing for an empty list', () => {
+    expect(groupByDay([])).toEqual([]);
+  });
+
+  it('groups consecutive same-day assets and splits on a date change', () => {
+    const items = [at(2024, 5, 3), at(2024, 5, 3, 9), at(2024, 5, 2), at(2024, 5, 2, 8)];
+    const groups = groupByDay(items);
+    expect(groups.map((g) => g.key)).toEqual(['2024-05-03', '2024-05-02']);
+    expect(groups.map((g) => g.assets.length)).toEqual([2, 2]);
+  });
+
+  it('preserves the input order exactly across groups', () => {
+    const items = [at(2024, 5, 3), at(2024, 5, 2), at(2024, 5, 1)];
+    const flat = groupByDay(items).flatMap((g) => g.assets.map((a) => a.id));
+    expect(flat).toEqual(items.map((a) => a.id));
+  });
+
+  it('does not merge same-day runs that are not adjacent', () => {
+    // Out-of-order input must not be silently reordered — the gallery's
+    // index-based scrolling depends on render order matching the array.
+    const items = [at(2024, 5, 3), at(2024, 5, 2), at(2024, 5, 3, 8)];
+    const groups = groupByDay(items);
+    expect(groups.map((g) => g.key)).toEqual(['2024-05-03', '2024-05-02', '2024-05-03']);
+  });
+
+  it('buckets undated assets under a single "unknown" key', () => {
+    const undated = { ...at(2024, 5, 3), takenAt: 0 };
+    const groups = groupByDay([undated, { ...undated, id: 'x' }]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).toBe('unknown');
+    expect(groups[0].label).toBe('Undated');
+  });
+
+  it('labels today and yesterday by name', () => {
+    const now = new Date(2024, 4, 3, 15, 0, 0);
+    expect(dayLabel(Math.floor(new Date(2024, 4, 3, 9).getTime() / 1000), now)).toBe('Today');
+    expect(dayLabel(Math.floor(new Date(2024, 4, 2, 9).getTime() / 1000), now)).toBe('Yesterday');
+  });
+
+  it('omits the year for the current year and includes it for older photos', () => {
+    const now = new Date(2024, 4, 3, 15, 0, 0);
+    expect(dayLabel(Math.floor(new Date(2024, 0, 15, 9).getTime() / 1000), now)).not.toMatch(/2024/);
+    expect(dayLabel(Math.floor(new Date(2021, 0, 15, 9).getTime() / 1000), now)).toMatch(/2021/);
   });
 });
